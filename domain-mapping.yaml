@@ -7,7 +7,7 @@ domains:
         methods: [get]
 
   projects:
-    description: "Manage TrustSource projects — list, create, update, delete projects and retrieve their parts lists and SBOMs"
+    description: "Manage TrustSource projects — list, create, update, delete projects and retrieve their parts lists, SBOMs, AIBOM/CBOM, environmental (iCVSS) context, architecture notes, and threat-model documents"
     minAccessMode: read
     paths:
       - path: /core/projects
@@ -27,9 +27,33 @@ domains:
         methods: [get]
       - path: /core/projects/{project_id}/sbom
         methods: [get]
+      - path: /core/projects/{project_id}/aibom
+        methods: [get]
+      - path: /core/projects/{project_id}/cbom
+        methods: [get]
+      - path: /core/projects/{project_id}/environmental-context
+        methods: [get]
+      - path: /core/projects/{project_id}/architecture
+        methods: [get]
+      - path: /core/projects/{project_id}/architecture
+        methods: [post]
+        minAccessMode: readwrite
+      - path: /core/projects/{project_id}/threat-models
+        methods: [get]
+      - path: /core/projects/{project_id}/threat-models
+        methods: [post]
+        minAccessMode: readwrite
+      - path: /core/projects/{project_id}/threat-models/{id}
+        methods: [get]
+      - path: /core/projects/{project_id}/threat-models/{id}
+        methods: [put]
+        minAccessMode: readwrite
+      - path: /core/projects/{project_id}/threat-models/{id}
+        methods: [delete]
+        minAccessMode: full
 
   modules:
-    description: "Manage TrustSource modules — list, create, update, delete modules and retrieve their parts lists and SBOMs"
+    description: "Manage TrustSource modules — list, create, update, delete modules and retrieve their parts lists, SBOMs, AIBOM/CBOM, and environmental (iCVSS) context"
     minAccessMode: read
     paths:
       - path: /core/modules
@@ -45,6 +69,12 @@ domains:
       - path: /core/modules/{module_id}/partsList
         methods: [get]
       - path: /core/modules/{module_id}/sbom
+        methods: [get]
+      - path: /core/modules/{module_id}/aibom
+        methods: [get]
+      - path: /core/modules/{module_id}/cbom
+        methods: [get]
+      - path: /core/modules/{module_id}/environmental-context
         methods: [get]
 
   products:
@@ -134,13 +164,19 @@ domains:
         minAccessMode: readwrite
 
   tests:
-    description: "Import SARIF test results into TrustSource for security analysis"
-    minAccessMode: readwrite
+    description: "Import SARIF test results into TrustSource for security analysis, and list/retrieve previously imported documents"
+    minAccessMode: read
     paths:
       - path: /core/tests/sarif
+        methods: [get]
+      - path: /core/tests/sarif
         methods: [post]
+        minAccessMode: readwrite
+      - path: /core/tests/sarif/{id}
+        methods: [get]
       - path: /core/tests/sarif/json
         methods: [post]
+        minAccessMode: readwrite
 
   reports:
     description: "Retrieve compliance, vulnerability, versioning, viability, license, CVE, dashboard, and end-of-life reports"
@@ -219,11 +255,11 @@ domains:
       - path: /vulnerabilities/cwes/{cwe_id}
         methods: [get]
       - path: /vulnerabilities/cveDetails
-        methods: [get]
+        methods: [post]
       - path: /vulnerabilities/cveFind
-        methods: [get]
+        methods: [post]
       - path: /vulnerabilities/cveFindByKey
-        methods: [get]
+        methods: [post]
 
   psirt:
     description: "Access Product Security Incident Response CSAF/VEX advisories for components"
@@ -245,7 +281,7 @@ domains:
         methods: [get]
 
   risks:
-    description: "Manage risk assessments — list, create, update, delete risks and their associated tasks"
+    description: "Manage risk assessments — list, create, update, delete risks and their associated tasks and countermeasures"
     minAccessMode: read
     paths:
       - path: /core/risks
@@ -272,6 +308,19 @@ domains:
         methods: [post]
         minAccessMode: readwrite
       - path: /core/risks/{risk_id}/tasks/{task_id}
+        methods: [delete]
+        minAccessMode: full
+      - path: /core/risks/{risk_id}/countermeasures
+        methods: [get]
+      - path: /core/risks/{risk_id}/countermeasures
+        methods: [post]
+        minAccessMode: readwrite
+      - path: /core/risks/{risk_id}/countermeasures/{cm_id}
+        methods: [get]
+      - path: /core/risks/{risk_id}/countermeasures/{cm_id}
+        methods: [post]
+        minAccessMode: readwrite
+      - path: /core/risks/{risk_id}/countermeasures/{cm_id}
         methods: [delete]
         minAccessMode: full
 

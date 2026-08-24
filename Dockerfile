@@ -1,4 +1,4 @@
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 
 WORKDIR /app
 COPY package.json package-lock.json* ./
@@ -13,7 +13,7 @@ COPY src/ ./src/
 RUN npm run codegen
 RUN npm run build
 
-FROM node:22-alpine
+FROM node:24-alpine
 
 # Remove npm/yarn/corepack — not needed at runtime, eliminates their
 # transitive vulnerabilities (minimatch, cookie, etc.) from the image

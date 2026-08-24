@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-08-24
+
+### Changed
+
+- Synced `ts-api/openapi.yaml` with the latest TrustSource API v2 spec - clearer endpoint descriptions, required-scope documentation, and new CSAF/Threat Modeling tags
+- Regenerated `src/generated-tools.ts` from the updated spec
+
+### Security
+
+- Bumped transitive dependencies to fix known vulnerabilities: `hono` (path traversal, CORS, ReDoS, XSS advisories), `@hono/node-server` (path traversal), `fast-uri` (host confusion), `ip-address` (SSRF bypass), `body-parser` (DoS), `esbuild` (arbitrary file read)
+
 ## [0.2.0] - 2026-06-07
 
 ### Added
