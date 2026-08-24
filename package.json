@@ -1,6 +1,6 @@
 {
   "name": "@trustsource/mcp-server",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "MCP server for the TrustSource REST API",
   "type": "module",
   "main": "dist/index.js",
@@ -15,7 +15,13 @@
     "docker:build": "docker build -t trustsource/ts-mcp .",
     "prepare": "npm run codegen && npm run build"
   },
-  "keywords": ["mcp", "trustsource", "sbom", "compliance", "security"],
+  "keywords": [
+    "mcp",
+    "trustsource",
+    "sbom",
+    "compliance",
+    "security"
+  ],
   "license": "Apache-2.0",
   "engines": {
     "node": ">=20"

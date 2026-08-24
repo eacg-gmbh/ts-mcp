@@ -39,6 +39,10 @@ tags:
     description: CVE/CWE vulnerability lookup and search
   - name: PSIRT
     description: Product Security Incident Response (CSAF advisories)
+  - name: CSAF
+    description: CSAF (Common Security Advisory Framework) advisory document store
+  - name: Threat Modeling
+    description: Per-project OTM / OWASP Threat Dragon threat-model documents
 servers:
   - url: https://api.trustsource.io/v2
 paths:
@@ -1696,7 +1700,12 @@ paths:
       tags:
         - Projects
       summary: List projects
-      description: Returns all projects belonging to the company associated with the API key.
+      description: >-
+        Returns all projects belonging to the company associated with the API key,
+        paged with 100 projects per page. The list contains a reduced representation
+        (id, name, description) — use `GET /core/projects/{project_id}` for settings.
+        Requires an API key with `manager`, `compliance_manager`, `portfolio_manager`
+        or `company_security_manager` scope.
       parameters:
         - name: x-api-key
           in: header
@@ -1760,19 +1769,16 @@ paths:
       tags:
         - Projects
       summary: Create project
-      description: Creates a new project in the company associated with the API key.
+      description: >-
+        Creates a new project in the company associated with the API key. All project
+        settings can be provided at creation time — see the request schema.
+        Requires an API key with `developer`, `manager` or `portfolio_manager` scope.
       requestBody:
-        description: Project settings object
+        description: Project object — `name` is required, all other settings optional
         content:
           application/json:
             schema:
-              title: RequestBodyCreateProject
-              required:
-                - name
-              type: object
-              properties:
-                name:
-                  type: string
+              $ref: '#/components/schemas/RequestBodyCreateProject'
         required: true
       responses:
         '201':
@@ -1864,7 +1870,13 @@ paths:
       tags:
         - Projects
       summary: Get project details
-      description: Returns project details including the latest analysis results.
+      description: >-
+        Returns project details including all project settings (license config, component
+        config, CVE config, obligation config, requirements, etc.). Use this to read
+        current settings before updating them via POST. Integration settings
+        (`jira`, `tfs`, `github`) are never returned — they contain credentials.
+        Requires an API key with `manager`, `compliance_manager`, `portfolio_manager`
+        or `company_security_manager` scope.
       parameters:
         - name: x-api-key
           in: header
@@ -1879,11 +1891,13 @@ paths:
             type: string
       responses:
         '200':
-          description: Successful response
+          description: >-
+            Project details including all project settings (integration
+            credentials excluded)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ProjectShort'
+                $ref: '#/components/schemas/ProjectSettings'
         '401':
           description: Unauthorized
           content:
@@ -1922,7 +1936,16 @@ paths:
       tags:
         - Projects
       summary: Update project
-      description: Updates project settings such as legal rules, obligation config, license config, and component config.
+      description: >-
+        Updates project settings such as license config, component config, CVE config,
+        obligation config, legal rules config and requirements.
+        Only the fields present in the request body are modified, but each provided
+        top-level field (e.g. `licenseConfig`) replaces the stored value as a whole —
+        always send the complete object for any config you change. `companyId` is
+        derived from the API key and cannot be set; fields not defined in the project
+        schema are silently dropped.
+        Requires an API key with `developer`, `manager` or `portfolio_manager` scope.
+        On success the full updated project document is returned.
       parameters:
         - name: x-api-key
           in: header
@@ -1931,42 +1954,27 @@ paths:
             type: string
         - name: project_id
           in: path
-          description: ID of the project to read
+          description: ID of the project to update
           required: true
           schema:
             type: string
       requestBody:
-        description: Project settings object
+        description: Project settings object — see schema for all supported settings
         content:
           application/json:
             schema:
-              title: RequestBodyUpdateProject
-              type: object
-              properties:
-                name:
-                  type: string
-                description:
-                  type: string
-                requireWhitelist:
-                  type: boolean
-                legalRulesConfig:
-                  type: object
-                obligationConfig:
-                  type: object
-                licenseConfig:
-                  type: object
-                componentConfig:
-                  type: object
-                confidenceMinScore:
-                  type: string
+              $ref: '#/components/schemas/RequestBodyUpdateProject'
         required: true
       responses:
         '200':
-          description: Update, request was successful
+          description: Update successful, returns the full updated project document
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Generic200'
+                title: UpdatedProject
+                type: object
+                description: The complete project document after the update
+                additionalProperties: true
         '400':
           description: Bad Request, data validation not successful
           content:
@@ -2012,7 +2020,11 @@ paths:
       tags:
         - Projects
       summary: Delete project
-      description: Permanently deletes a project and all its associated data.
+      description: >-
+        Permanently deletes a project. Fails with 400 if the project still has modules,
+        unless `force=true` is passed — then all associated modules are deleted as well.
+        Requires an API key with `manager`, `account_admin`, `enterprise_admin`
+        or `portfolio_manager` scope.
       parameters:
         - name: x-api-key
           in: header
@@ -2313,6 +2325,539 @@ paths:
           application/json: '{"statusCode": 200}'
         type: "mock"
         passthroughBehavior: "NEVER"
+  /core/projects/{project_id}/aibom:
+    get:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "GET"
+        uri: "http://${stageVariables.url}/api/v1/projects/{project_id}/aibom"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.project_id: "method.request.path.project_id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Projects
+      summary: Get project AIBOM
+      description: >-
+        Returns the AI/ML Bill of Materials for a whole project as a CycloneDX 1.7
+        document, aggregating the machine-learning-model assets of all its modules.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: project_id
+          in: path
+          description: ID of the project to read
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CyclonedxDocument'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    options:
+      parameters:
+        - name: project_id
+          in: path
+          description: ID of the project
+          required: true
+          schema:
+            type: string
+      x-swagger-router-ignore: true
+      tags:
+        - Projects
+      responses:
+        "200":
+          description: "200 response"
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Empty"
+      x-amazon-apigateway-integration:
+        responses:
+          default:
+            statusCode: "200"
+            responseParameters:
+              method.response.header.Access-Control-Allow-Methods: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,x-api-key,x-apikey,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        requestTemplates:
+          application/json: '{"statusCode": 200}'
+        type: "mock"
+        passthroughBehavior: "NEVER"
+  /core/projects/{project_id}/cbom:
+    get:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "GET"
+        uri: "http://${stageVariables.url}/api/v1/projects/{project_id}/cbom"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.project_id: "method.request.path.project_id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Projects
+      summary: Get project CBOM
+      description: >-
+        Returns the Cryptography Bill of Materials for a whole project as a
+        CycloneDX 1.7 document, aggregating the cryptographic assets of all its
+        modules.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: project_id
+          in: path
+          description: ID of the project to read
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CyclonedxDocument'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    options:
+      parameters:
+        - name: project_id
+          in: path
+          description: ID of the project
+          required: true
+          schema:
+            type: string
+      x-swagger-router-ignore: true
+      tags:
+        - Projects
+      responses:
+        "200":
+          description: "200 response"
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Empty"
+      x-amazon-apigateway-integration:
+        responses:
+          default:
+            statusCode: "200"
+            responseParameters:
+              method.response.header.Access-Control-Allow-Methods: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,x-api-key,x-apikey,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        requestTemplates:
+          application/json: '{"statusCode": 200}'
+        type: "mock"
+        passthroughBehavior: "NEVER"
+  /core/projects/{project_id}/environmental-context:
+    get:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "GET"
+        uri: "http://${stageVariables.url}/api/v1/projects/{project_id}/environmental-context"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.project_id: "method.request.path.project_id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Projects
+      summary: Get project environmental (iCVSS) context
+      description: >-
+        Returns one environmental-context entry per module in the project: the
+        module's CR/IR/AR requirements, its CVSS v2/v3/v4 environmental vector
+        strings, and the best-effort Modified Attack Vector (MAV) parsed from the
+        v4 (then v3) vector. Read-only; company-scoped by the API key.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: project_id
+          in: path
+          description: ID of the project whose modules to read
+          required: true
+          schema:
+            type: string
+        - name: page
+          in: query
+          description: Page number to be fetched, starting from 1 (page size 100, ordered by module name)
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                title: ArrayOfEnvironmentalContext
+                type: array
+                items:
+                  $ref: '#/components/schemas/EnvironmentalContext'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: API-key scope is limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    options:
+      parameters:
+        - name: project_id
+          in: path
+          description: ID of the project
+          required: true
+          schema:
+            type: string
+      x-swagger-router-ignore: true
+      tags:
+        - Projects
+      responses:
+        "200":
+          description: "200 response"
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Empty"
+      x-amazon-apigateway-integration:
+        responses:
+          default:
+            statusCode: "200"
+            responseParameters:
+              method.response.header.Access-Control-Allow-Methods: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,x-api-key,x-apikey,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        requestTemplates:
+          application/json: '{"statusCode": 200}'
+        type: "mock"
+        passthroughBehavior: "NEVER"
+  /core/projects/{project_id}/architecture:
+    get:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "GET"
+        uri: "http://${stageVariables.url}/api/v1/projects/{project_id}/architecture"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.project_id: "method.request.path.project_id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Projects
+      summary: Get project Application goals
+      description: >-
+        Returns the content previously uploaded/posted to populate the project's
+        Application goals field (see POST below). Returns an empty string if
+        nothing has been uploaded yet — never 404 for "no content".
+        Requires an API key with `manager`, `compliance_manager`, `portfolio_manager`
+        or `company_security_manager` scope.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: project_id
+          in: path
+          description: ID of the project to read
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                title: ArchitectureContent
+                type: object
+                properties:
+                  content:
+                    type: string
+                    description: The stored Application goals content, or an empty string if none has been uploaded yet.
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "POST"
+        uri: "http://${stageVariables.url}/api/v1/projects/{project_id}/architecture"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.project_id: "method.request.path.project_id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Projects
+      summary: Set project Application goals from markdown content
+      description: >-
+        Uploads/sets markdown content (e.g. the contents of an architecture.md
+        file) to populate the project's Application goals field. Content is
+        screened for prompt-injection/jailbreak attempts before it is stored;
+        content that fails screening is rejected with a 400 and is not stored.
+        Capped at 100 KB.
+        Requires an API key with `developer`, `manager` or `portfolio_manager` scope.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: project_id
+          in: path
+          description: ID of the project to update
+          required: true
+          schema:
+            type: string
+      requestBody:
+        description: Markdown content to store as the project's Application goals
+        content:
+          application/json:
+            schema:
+              title: RequestBodyArchitecture
+              type: object
+              required:
+                - content
+              properties:
+                content:
+                  type: string
+                  description: Markdown content, up to 100 KB.
+        required: true
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                title: ArchitectureUpdated
+                type: object
+                properties:
+                  projectId:
+                    type: string
+                  content:
+                    type: string
+        '400':
+          description: Bad Request — invalid content, content too large, or content rejected by the screening pipeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      x-codegen-request-body-name: body
+    options:
+      parameters:
+        - name: project_id
+          in: path
+          description: ID of the project
+          required: true
+          schema:
+            type: string
+      x-swagger-router-ignore: true
+      tags:
+        - Projects
+      responses:
+        "200":
+          description: "200 response"
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Empty"
+      x-amazon-apigateway-integration:
+        responses:
+          default:
+            statusCode: "200"
+            responseParameters:
+              method.response.header.Access-Control-Allow-Methods: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,x-api-key,x-apikey,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        requestTemplates:
+          application/json: '{"statusCode": 200}'
+        type: "mock"
+        passthroughBehavior: "NEVER"
   /core/modules:
     get:
       security:
@@ -2333,7 +2878,11 @@ paths:
       tags:
         - Modules
       summary: List modules
-      description: Returns all modules belonging to the company associated with the API key.
+      description: >-
+        Returns all modules belonging to the company associated with the API key,
+        paged with 100 modules per page.
+        Requires an API key with `manager`, `compliance_manager`, `portfolio_manager`
+        or `company_security_manager` scope.
       parameters:
         - name: x-api-key
           in: header
@@ -2361,18 +2910,26 @@ paths:
           content:
             application/json:
               schema:
-                title: ArrayOfProjects
+                title: ArrayOfModules
                 type: array
                 items:
-                  title: Module
+                  title: ModuleListEntry
                   type: object
+                  description: >-
+                    Reduced module representation — the list endpoint returns only id, name
+                    and description. Use `GET /core/modules/{module_id}` to retrieve status,
+                    project assignment and the latest analysis results.
                   properties:
                     _id:
                       type: string
+                      description: Module ID, use it as `module_id` in the detail endpoints
+                      example: vewfCuCmkpqXyuDrX
                     name:
                       type: string
+                      example: payment-service
                     description:
                       type: string
+                      example: Backend payment processing service
         '401':
           description: Unauthorized
           content:
@@ -2439,7 +2996,12 @@ paths:
       tags:
         - Modules
       summary: Get module details
-      description: Returns module details including the latest analysis results.
+      description: >-
+        Returns module details including all module settings (license config, component
+        config, viability config, CVE config, obligation config, etc.) and the latest
+        analysis results. Use this to read current settings before updating them via POST.
+        Requires an API key with `manager`, `compliance_manager`, `portfolio_manager`
+        or `company_security_manager` scope.
       parameters:
         - name: x-api-key
           in: header
@@ -2454,26 +3016,14 @@ paths:
             type: string
       responses:
         '200':
-          description: Successful response
+          description: >-
+            Module details including overall status, project assignment, all
+            module settings and the latest analysis summary (date, scan and
+            warning/violation statistics per analysis dimension)
           content:
             application/json:
               schema:
-                title: Module details
-                type: object
-                properties:
-                  _id:
-                    type: string
-                    description: the module id
-                  name:
-                    type: string
-                  description:
-                    type: string
-                  status:
-                    type: string
-                  analysis:
-                    type: object
-                    description: Module analysis results
-                    additionalProperties: true
+                $ref: '#/components/schemas/ModuleSettings'
         '401':
           description: Unauthorized
           content:
@@ -2512,7 +3062,15 @@ paths:
       tags:
         - Modules
       summary: Update module
-      description: Updates module settings such as license config, component config, viability config, and obligation config.
+      description: >-
+        Updates module settings such as license config, component config, viability config,
+        CVE config, obligation config, legal rules config and requirements.
+        Only the fields present in the request body are modified, but each provided top-level
+        field (e.g. `licenseConfig`) replaces the stored value as a whole — always send the
+        complete object for any config you change. `companyId` is derived from the API key
+        and cannot be set; fields not defined in the module schema are silently dropped.
+        Requires an API key with `developer` or `manager` scope.
+        On success the full updated module document is returned.
       parameters:
         - name: x-api-key
           in: header
@@ -2521,52 +3079,27 @@ paths:
             type: string
         - name: module_id
           in: path
-          description: ID of the module to read
+          description: ID of the module to update
           required: true
           schema:
             type: string
       requestBody:
-        description: Modules settings object
+        description: Module settings object — see schema for all supported settings
         content:
           application/json:
             schema:
-              title: RequestBodyUpdateModule
-              type: object
-              properties:
-                name:
-                  type: string
-                version:
-                  type: string
-                description:
-                  type: boolean
-                projectId:
-                  type: object
-                licenseConfig:
-                  type: object
-                componentConfig:
-                  type: object
-                viabilityConfig:
-                  type: object
-                ossfConfig:
-                  type: object
-                versioningConfig:
-                  type: object
-                cveConfig:
-                  type: object
-                obligationConfig:
-                  type: object
-                legalRulesConfig:
-                  type: object
-                requirements:
-                  type: object
+              $ref: '#/components/schemas/RequestBodyUpdateModule'
         required: true
       responses:
         '200':
-          description: Create, request was successful
+          description: Update successful, returns the full updated module document
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Generic200'
+                title: UpdatedModule
+                type: object
+                description: The complete module document after the update
+                additionalProperties: true
         '400':
           description: Bad Request, data validation not successful
           content:
@@ -2612,7 +3145,10 @@ paths:
       tags:
         - Modules
       summary: Delete module
-      description: Permanently deletes a module and all its associated data.
+      description: >-
+        Permanently deletes a module and all its associated data.
+        Requires an API key with `manager`, `account_admin`, `enterprise_admin`
+        or `portfolio_manager` scope.
       parameters:
         - name: x-api-key
           in: header
@@ -2869,6 +3405,319 @@ paths:
         - name: module_id
           in: path
           description: ID of the module to read
+          required: true
+          schema:
+            type: string
+      x-swagger-router-ignore: true
+      tags:
+        - Modules
+      responses:
+        "200":
+          description: "200 response"
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Empty"
+      x-amazon-apigateway-integration:
+        responses:
+          default:
+            statusCode: "200"
+            responseParameters:
+              method.response.header.Access-Control-Allow-Methods: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,x-api-key,x-apikey,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        requestTemplates:
+          application/json: '{"statusCode": 200}'
+        type: "mock"
+        passthroughBehavior: "NEVER"
+  /core/modules/{module_id}/aibom:
+    get:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "GET"
+        uri: "http://${stageVariables.url}/api/v1/modules/{module_id}/aibom"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.module_id: "method.request.path.module_id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Modules
+      summary: Get module AIBOM
+      description: >-
+        Returns the AI/ML Bill of Materials for a module as a CycloneDX 1.7
+        document, containing the module's machine-learning-model assets (with
+        modelCard) detected via scans/imports or managed in the module settings.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: module_id
+          in: path
+          description: ID of the module to read
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CyclonedxDocument'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    options:
+      parameters:
+        - name: module_id
+          in: path
+          description: ID of the module
+          required: true
+          schema:
+            type: string
+      x-swagger-router-ignore: true
+      tags:
+        - Modules
+      responses:
+        "200":
+          description: "200 response"
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Empty"
+      x-amazon-apigateway-integration:
+        responses:
+          default:
+            statusCode: "200"
+            responseParameters:
+              method.response.header.Access-Control-Allow-Methods: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,x-api-key,x-apikey,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        requestTemplates:
+          application/json: '{"statusCode": 200}'
+        type: "mock"
+        passthroughBehavior: "NEVER"
+  /core/modules/{module_id}/cbom:
+    get:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "GET"
+        uri: "http://${stageVariables.url}/api/v1/modules/{module_id}/cbom"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.module_id: "method.request.path.module_id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Modules
+      summary: Get module CBOM
+      description: >-
+        Returns the Cryptography Bill of Materials for a module as a CycloneDX 1.7
+        document, containing the module's cryptographic assets detected via
+        scans/imports or managed in the module settings.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: module_id
+          in: path
+          description: ID of the module to read
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CyclonedxDocument'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    options:
+      parameters:
+        - name: module_id
+          in: path
+          description: ID of the module
+          required: true
+          schema:
+            type: string
+      x-swagger-router-ignore: true
+      tags:
+        - Modules
+      responses:
+        "200":
+          description: "200 response"
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Empty"
+      x-amazon-apigateway-integration:
+        responses:
+          default:
+            statusCode: "200"
+            responseParameters:
+              method.response.header.Access-Control-Allow-Methods: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,x-api-key,x-apikey,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        requestTemplates:
+          application/json: '{"statusCode": 200}'
+        type: "mock"
+        passthroughBehavior: "NEVER"
+  /core/modules/{module_id}/environmental-context:
+    get:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "GET"
+        uri: "http://${stageVariables.url}/api/v1/modules/{module_id}/environmental-context"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.module_id: "method.request.path.module_id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Modules
+      summary: Get module environmental (iCVSS) context
+      description: >-
+        Returns the module's CVSS environmental context: its CR/IR/AR
+        requirements, its CVSS v2/v3/v4 environmental vector strings, and the
+        best-effort Modified Attack Vector (MAV) parsed from the v4 (then v3)
+        vector. Read-only; company-scoped by the API key.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: module_id
+          in: path
+          description: ID of the module to read
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvironmentalContext'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: API-key scope is limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    options:
+      parameters:
+        - name: module_id
+          in: path
+          description: ID of the module
           required: true
           schema:
             type: string
@@ -5421,7 +6270,17 @@ paths:
       tags:
         - Scans
       summary: Import CycloneDX SBOM (JSON body)
-      description: Imports dependency information from a CycloneDX SBOM provided as a JSON request body.
+      description: >-
+        Imports dependency information from a CycloneDX SBOM provided as a JSON
+        request body. CycloneDX spec versions 1.2 through 1.7 are accepted; the
+        version is taken from the document's `specVersion` field, falling back to
+        the `version` query parameter. CycloneDX 1.7 `cryptographic-asset`
+        components are not imported as dependencies — they are round-tripped into
+        the module's crypto properties (CBOM) and linked to the components that
+        reference them via the `dependencies` graph. Likewise `machine-learning-model`
+        components are round-tripped into the module's AI artifacts (AIBOM). This is
+        therefore also the endpoint for publishing an AIBOM or CBOM "as it is with
+        the SBOM".
       parameters:
         - name: x-api-key
           in: header
@@ -5431,6 +6290,13 @@ paths:
         - name: pkgType
           in: query
           description: Type of pkg to apply for included components
+          schema:
+            type: string
+        - name: version
+          in: query
+          description: >-
+            CycloneDX spec version (1.2–1.7) used as a fallback when the document
+            body has no `specVersion` field.
           schema:
             type: string
         - name: project
@@ -5464,6 +6330,12 @@ paths:
           description: Specify artifact binary links
           schema:
             type: string
+        - name: demo
+          in: query
+          description: >-
+            When `true`, the resulting scan and module are flagged as demo data.
+          schema:
+            type: boolean
         - name: user-agent
           in: header
           description: 'Information about the utilized user-agent. The following format is suggested: user-agent: ''name/version'' '
@@ -5509,25 +6381,25 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Generic200'
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Unauthorized
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Generic200'
+                $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: Forbidden
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Generic200'
+                $ref: '#/components/schemas/ErrorResponse'
         '405':
           description: Method not allowed
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Generic200'
+                $ref: '#/components/schemas/ErrorResponse'
       x-codegen-request-body-name: body
     options:
       x-swagger-router-ignore: true
@@ -5582,7 +6454,17 @@ paths:
       tags:
         - Scans
       summary: Import CycloneDX SBOM (file upload)
-      description: Imports dependency information from a CycloneDX SBOM uploaded as a file.
+      description: >-
+        Imports dependency information from a CycloneDX SBOM uploaded as a
+        multipart file. CycloneDX spec versions 1.2 through 1.7 are accepted; the
+        version is taken from the document's `specVersion` field, falling back to
+        the `version` query parameter. CycloneDX 1.7 `cryptographic-asset`
+        components are not imported as dependencies — they are round-tripped into
+        the module's crypto properties (CBOM) and linked to the components that
+        reference them via the `dependencies` graph. Likewise `machine-learning-model`
+        components are round-tripped into the module's AI artifacts (AIBOM). This is
+        therefore also the endpoint for publishing an AIBOM or CBOM "as it is with
+        the SBOM".
       parameters:
         - name: x-api-key
           in: header
@@ -5630,6 +6512,12 @@ paths:
           description: Specify artifact binary links
           schema:
             type: string
+        - name: demo
+          in: query
+          description: >-
+            When `true`, the resulting scan and module are flagged as demo data.
+          schema:
+            type: boolean
         - name: user-agent
           in: header
           description: 'Information about the utilized user-agent. The following format is suggested: user-agent: ''name/version'' '
@@ -6186,6 +7074,95 @@ paths:
         type: "mock"
         passthroughBehavior: "NEVER"
   /core/tests/sarif:
+    get:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "GET"
+        uri: "http://${stageVariables.url}/api/v1/tests/sarif"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Tests
+      summary: List imported SARIF documents
+      description: |
+        Lists the SARIF test documents imported for the company, newest first
+        (100 per page). Each entry carries the metadata needed to pick a
+        document for further analysis: the origin tool (e.g. semgrep), the
+        import date, the rule summary and the number of findings per severity.
+        The SARIF run content itself is not included; fetch a single document
+        to read its findings.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: origin
+          in: query
+          description: Filter by origin tool name (e.g. semgrep)
+          schema:
+            type: string
+        - name: projectName
+          in: query
+          description: Filter by project name
+          schema:
+            type: string
+        - name: moduleName
+          in: query
+          description: Filter by module name
+          schema:
+            type: string
+        - name: moduleId
+          in: query
+          description: Filter by module id
+          schema:
+            type: string
+        - name: scanId
+          in: query
+          description: Filter by scan id
+          schema:
+            type: string
+        - name: analysisId
+          in: query
+          description: Filter by analysis id
+          schema:
+            type: string
+        - name: page
+          in: query
+          description: Page number (1-based, 100 entries per page)
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: OK, request was successful
+          content:
+            application/json:
+              schema:
+                title: SARIFDocumentList
+                type: array
+                items:
+                  $ref: '#/components/schemas/SARIFDocumentSummary'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Generic200'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Generic200'
     post:
       security:
         - api_key: [ ]
@@ -6524,6 +7501,116 @@ paths:
               method.response.header.Access-Control-Allow-Methods: "'*'"
               method.response.header.Access-Control-Allow-Headers: "'Content-Length,Content-Type,X-Amz-Date,Authorization,x-api-key,x-apikey,X-Amz-Security-Token'"
               method.response.header.Access-Control-Allow-Origin: "'*'"
+        requestTemplates:
+          application/json: '{"statusCode": 200}'
+        type: "mock"
+        passthroughBehavior: "NEVER"
+  /core/tests/sarif/{id}:
+    get:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "GET"
+        uri: "http://${stageVariables.url}/api/v1/tests/sarif/{id}"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.id: "method.request.path.id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Tests
+      summary: Get an imported SARIF document
+      description: |
+        Returns a single imported SARIF test document: the metadata (origin
+        tool, import date, rule summary, finding counts) plus the stored run
+        wrapped in a SARIF envelope (`sarif.runs[0]`), so all findings and
+        suggested fixes can be read as-is.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          description: ID of the SARIF test document
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK, request was successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SARIFDocument'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Generic200'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Generic200'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Generic200'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Generic200'
+    options:
+      x-swagger-router-ignore: true
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      tags:
+        - Tests
+      responses:
+        "200":
+          description: "200 response"
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Empty"
+      x-amazon-apigateway-integration:
+        responses:
+          default:
+            statusCode: "200"
+            responseParameters:
+              method.response.header.Access-Control-Allow-Methods: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Length,Content-Type,X-Amz-Date,Authorization,x-api-key,x-apikey,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        requestParameters:
+          integration.request.path.id: "method.request.path.id"
         requestTemplates:
           application/json: '{"statusCode": 200}'
         type: "mock"
@@ -7900,10 +8987,10 @@ paths:
             schema:
               title: RequestBodyCVEDetails
               required:
-                - cves
+                - vulns
               type: object
               properties:
-                cves:
+                vulns:
                   type: array
                   items:
                     type: string
@@ -8309,6 +9396,469 @@ paths:
           application/json: '{"statusCode": 200}'
         type: "mock"
         passthroughBehavior: "NEVER"
+  /core/projects/{project_id}/threat-models:
+    get:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "GET"
+        uri: "http://${stageVariables.url}/api/v1/projects/{project_id}/threat-models"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.project_id: "method.request.path.project_id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Threat Modeling
+      summary: List threat-model documents
+      description: >-
+        Returns the project's stored threat-model documents (OTM or Threat
+        Dragon), newest first. Use `latest=true` to return only the most recent
+        document.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: project_id
+          in: path
+          description: ID of the project that owns the documents
+          required: true
+          schema:
+            type: string
+        - name: page
+          in: query
+          description: Page number to be fetched, starting from 1
+          schema:
+            type: string
+        - name: latest
+          in: query
+          description: When 'true', return only the most recent document
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                title: ArrayOfThreatModelDocuments
+                type: array
+                items:
+                  $ref: '#/components/schemas/ThreatModelDocument'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "POST"
+        uri: "http://${stageVariables.url}/api/v1/projects/{project_id}/threat-models"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.project_id: "method.request.path.project_id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Threat Modeling
+      summary: Store threat-model document
+      description: >-
+        Stores a new threat-model document for the project. Content is the
+        complete OTM YAML or Threat Dragon JSON as a string (up to 5 MB). Set
+        `validate=true` to validate the content against the format schema.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: project_id
+          in: path
+          description: ID of the project that owns the document
+          required: true
+          schema:
+            type: string
+        - name: validate
+          in: query
+          description: When 'true', validate content against the format JSON schema
+          required: false
+          schema:
+            type: string
+      requestBody:
+        description: Threat-model document
+        content:
+          application/json:
+            schema:
+              title: RequestBodyStoreThreatModelDocument
+              required:
+                - content
+              type: object
+              properties:
+                content:
+                  type: string
+                format:
+                  type: string
+                  enum: [otm, threat-dragon]
+                  default: otm
+                formatVersion:
+                  type: string
+                otmVersion:
+                  type: string
+                  description: Alias for formatVersion when format is otm
+                tmRunId:
+                  type: string
+                previousTmRunId:
+                  type: string
+                threatModelId:
+                  type: string
+                status:
+                  type: string
+                  enum: [draft, reviewed, approved]
+                  default: draft
+                summary:
+                  $ref: '#/components/schemas/ThreatModelSummary'
+        required: true
+      responses:
+        '201':
+          description: Created, request was successful
+          content:
+            application/json:
+              schema:
+                title: ThreatModelDocumentID
+                type: object
+                properties:
+                  documentId:
+                    type: string
+        '400':
+          description: Bad Request, data validation not successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      x-codegen-request-body-name: body
+    options:
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-swagger-router-ignore: true
+      tags:
+        - Threat Modeling
+      responses:
+        "200":
+          description: "200 response"
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Empty"
+      x-amazon-apigateway-integration:
+        responses:
+          default:
+            statusCode: "200"
+            responseParameters:
+              method.response.header.Access-Control-Allow-Methods: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,x-api-key,x-apikey,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        requestTemplates:
+          application/json: '{"statusCode": 200}'
+        type: "mock"
+        passthroughBehavior: "NEVER"
+  /core/projects/{project_id}/threat-models/{id}:
+    get:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "GET"
+        uri: "http://${stageVariables.url}/api/v1/projects/{project_id}/threat-models/{id}"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.project_id: "method.request.path.project_id"
+          integration.request.path.id: "method.request.path.id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Threat Modeling
+      summary: Get threat-model document
+      description: Returns a single threat-model document including its content.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          description: ID of the document to read
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreatModelDocument'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "PUT"
+        uri: "http://${stageVariables.url}/api/v1/projects/{project_id}/threat-models/{id}"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.project_id: "method.request.path.project_id"
+          integration.request.path.id: "method.request.path.id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Threat Modeling
+      summary: Update document status
+      description: Updates the review status of a threat-model document (draft / reviewed / approved).
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          description: ID of the document to update
+          required: true
+          schema:
+            type: string
+      requestBody:
+        description: Status update
+        content:
+          application/json:
+            schema:
+              title: RequestBodyUpdateThreatModelStatus
+              required:
+                - status
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [draft, reviewed, approved]
+        required: true
+      responses:
+        '200':
+          description: Update, request was successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreatModelDocument'
+        '400':
+          description: Bad Request, data validation not successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      x-codegen-request-body-name: body
+    delete:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "DELETE"
+        uri: "http://${stageVariables.url}/api/v1/projects/{project_id}/threat-models/{id}"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.project_id: "method.request.path.project_id"
+          integration.request.path.id: "method.request.path.id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Threat Modeling
+      summary: Delete threat-model document
+      description: Permanently deletes a threat-model document. Requires full (delete) access.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          description: ID of the document to delete
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Delete, request was successful
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      x-codegen-request-body-name: body
+    options:
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-swagger-router-ignore: true
+      tags:
+        - Threat Modeling
+      responses:
+        "200":
+          description: "200 response"
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Empty"
+      x-amazon-apigateway-integration:
+        responses:
+          default:
+            statusCode: "200"
+            responseParameters:
+              method.response.header.Access-Control-Allow-Methods: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,x-api-key,x-apikey,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        requestTemplates:
+          application/json: '{"statusCode": 200}'
+        type: "mock"
+        passthroughBehavior: "NEVER"
   /core/risks:
     get:
       security:
@@ -8329,7 +9879,12 @@ paths:
       tags:
         - Risks
       summary: List risks
-      description: Returns all risks belonging to the company associated with the API key.
+      description: >-
+        Returns risks belonging to the company associated with the API key.
+        Either `projectId` or `moduleId` is required. Filtering by `projectId`
+        returns the project's own risks together with the risks of all its
+        modules; filtering by `moduleId` returns all risks attached to that
+        module. Each risk is returned at most once.
       parameters:
         - name: x-api-key
           in: header
@@ -8343,12 +9898,12 @@ paths:
             type: string
         - name: projectId
           in: query
-          description: Filter to limit result by projectId
+          description: Returns the project's risks and the risks of its modules. Either projectId or moduleId is required.
           schema:
             type: string
         - name: moduleId
           in: query
-          description: Filter to limit result by moduleId
+          description: Returns all risks attached to this module. Either projectId or moduleId is required.
           schema:
             type: string
       responses:
@@ -8361,6 +9916,12 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Risk'
+        '400':
+          description: Bad request — projectId or moduleId is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Unauthorized
           content:
@@ -8421,8 +9982,20 @@ paths:
                   properties:
                     origin:
                       type: array
+                      description: >-
+                        Risk origin tags. `TMA Assessment` is used for
+                        threat-model-agent risks.
                       items:
                         type: string
+                        enum: ['', SDLC, SQ, SSC, CVE, YARA, CWE, TD,
+                               'TMA Assessment', 'threat-model']
+                    countermeasures:
+                      type: array
+                      description: >-
+                        Countermeasures for this risk. Each entry requires a
+                        `countermeasure` name of 3-200 characters
+                      items:
+                        $ref: '#/components/schemas/Countermeasure'
                     impactClass:
                       type: string
                     confidentiality:
@@ -8437,6 +10010,9 @@ paths:
                       type: string
                     state:
                       type: string
+                      enum: ['', identified, assessed, approved, planned, implementing,
+                             monitored, accepted, closed, deferred, escalated, expired,
+                             transferred, eliminated, out-of-scope]
                     BV:
                       type: string
                     BV_enum:
@@ -8449,6 +10025,8 @@ paths:
                       type: string
                     ARO_enum:
                       type: string
+                    threatModelContext:
+                      $ref: '#/components/schemas/ThreatModelContext'
         required: true
       responses:
         '201':
@@ -8631,23 +10209,20 @@ paths:
                   properties:
                     origin:
                       type: array
+                      description: >-
+                        Risk origin tags. `TMA Assessment` is used for
+                        threat-model-agent risks.
                       items:
                         type: string
+                        enum: ['', SDLC, SQ, SSC, CVE, YARA, CWE, TD,
+                               'TMA Assessment', 'threat-model']
                     countermeasures:
                       type: array
+                      description: >-
+                        Countermeasures for this risk. Each entry requires a
+                        `countermeasure` name of 3-200 characters
                       items:
-                        type: object
-                        properties:
-                          countermeasure:
-                            type: string
-                          status:
-                            type: string
-                          comment:
-                            type: string
-                          responsible:
-                            type: array
-                            items:
-                              type: string
+                        $ref: '#/components/schemas/Countermeasure'
                     generalApproach:
                       type:
                         string
@@ -8665,6 +10240,9 @@ paths:
                       type: string
                     state:
                       type: string
+                      enum: ['', identified, assessed, approved, planned, implementing,
+                             monitored, accepted, closed, deferred, escalated, expired,
+                             transferred, eliminated, out-of-scope]
                     BV:
                       type: string
                     BV_enum:
@@ -8677,6 +10255,8 @@ paths:
                       type: string
                     ARO_enum:
                       type: string
+                    threatModelContext:
+                      $ref: '#/components/schemas/ThreatModelContext'
         required: true
       responses:
         '200':
@@ -9295,6 +10875,461 @@ paths:
           application/json: '{"statusCode": 200}'
         type: "mock"
         passthroughBehavior: "NEVER"
+  /core/risks/{risk_id}/countermeasures:
+    get:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "GET"
+        uri: "http://${stageVariables.url}/api/v1/risks/{risk_id}/countermeasures"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.risk_id: "method.request.path.risk_id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Risks
+      summary: List countermeasures by risk
+      description: Returns all countermeasures of a specific risk, each with its server-generated id.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: risk_id
+          in: path
+          description: ID of the risk to limit selection
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                title: ArrayOfCountermeasures
+                type: array
+                items:
+                  $ref: '#/components/schemas/Countermeasure'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: risk_id
+          in: path
+          description: ID of the risk to limit selection
+          required: true
+          schema:
+            type: string
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "POST"
+        uri: "http://${stageVariables.url}/api/v1/risks/{risk_id}/countermeasures"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.risk_id: "method.request.path.risk_id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Risks
+      summary: Create countermeasure
+      description: Creates a new countermeasure on the risk. The `_id` field is server-generated; an `_id` sent in the body is ignored.
+      requestBody:
+        description: Countermeasure object
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Countermeasure'
+        required: true
+      responses:
+        '201':
+          description: Create, request was successful
+          content:
+            application/json:
+              schema:
+                title: CountermeasureID
+                type: object
+                properties:
+                  countermeasureId:
+                    type: string
+        '400':
+          description: Bad Request, data validation not successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      x-codegen-request-body-name: body
+    options:
+      x-swagger-router-ignore: true
+      tags:
+        - Risks
+      parameters:
+        - name: risk_id
+          in: path
+          description: ID of the risk
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: "200 response"
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Empty"
+      x-amazon-apigateway-integration:
+        responses:
+          default:
+            statusCode: "200"
+            responseParameters:
+              method.response.header.Access-Control-Allow-Methods: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,x-api-key,x-apikey,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        requestTemplates:
+          application/json: '{"statusCode": 200}'
+        type: "mock"
+        passthroughBehavior: "NEVER"
+  /core/risks/{risk_id}/countermeasures/{cm_id}:
+    get:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "GET"
+        uri: "http://${stageVariables.url}/api/v1/risks/{risk_id}/countermeasures/{cm_id}"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.risk_id: "method.request.path.risk_id"
+          integration.request.path.cm_id: "method.request.path.cm_id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Risks
+      summary: Get countermeasure details
+      description: Returns a single countermeasure of the risk by its id.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: risk_id
+          in: path
+          description: ID of the risk to limit selection
+          required: true
+          schema:
+            type: string
+        - name: cm_id
+          in: path
+          description: ID of the countermeasure to read
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Countermeasure'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "POST"
+        uri: "http://${stageVariables.url}/api/v1/risks/{risk_id}/countermeasures/{cm_id}"
+        responses:
+          default:
+            statusCode: "200"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.risk_id: "method.request.path.risk_id"
+          integration.request.path.cm_id: "method.request.path.cm_id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Risks
+      summary: Update countermeasure
+      description: Merge-updates the countermeasure — fields not present in the body are preserved. The `_id` cannot be changed.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: risk_id
+          in: path
+          description: ID of the risk to limit selection
+          required: true
+          schema:
+            type: string
+        - name: cm_id
+          in: path
+          description: ID of the countermeasure to update
+          required: true
+          schema:
+            type: string
+      requestBody:
+        description: Countermeasure fields to update
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Countermeasure'
+        required: true
+      responses:
+        '200':
+          description: Update, request was successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Countermeasure'
+        '400':
+          description: Bad Request, data validation not successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      x-codegen-request-body-name: body
+    delete:
+      security:
+        - api_key: [ ]
+      x-amazon-apigateway-integration:
+        type: "http_proxy"
+        connectionId: "${stageVariables.vpcLinkId}"
+        connectionType: "VPC_LINK"
+        httpMethod: "DELETE"
+        uri: "http://${stageVariables.url}/api/v1/risks/{risk_id}/countermeasures/{cm_id}"
+        responses:
+          default:
+            statusCode: "204"
+        requestParameters:
+          integration.request.header.X-APIKEY: "method.request.header.x-api-key"
+          integration.request.path.risk_id: "method.request.path.risk_id"
+          integration.request.path.cm_id: "method.request.path.cm_id"
+          integration.request.header.version: "'2'"
+        passthroughBehavior: "when_no_match"
+      tags:
+        - Risks
+      summary: Delete countermeasure
+      description: Removes the countermeasure from the risk. Associated tasks are not modified.
+      parameters:
+        - name: x-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: risk_id
+          in: path
+          description: ID of the risk to limit selection
+          required: true
+          schema:
+            type: string
+        - name: cm_id
+          in: path
+          description: ID of the countermeasure to delete
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Delete, request was successful
+        '400':
+          description: Bad Request, data validation not successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      x-codegen-request-body-name: body
+    options:
+      parameters:
+        - name: risk_id
+          in: path
+          description: ID of the risk
+          required: true
+          schema:
+            type: string
+        - name: cm_id
+          in: path
+          description: ID of the countermeasure
+          required: true
+          schema:
+            type: string
+      x-swagger-router-ignore: true
+      tags:
+        - Risks
+      responses:
+        "200":
+          description: "200 response"
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Empty"
+      x-amazon-apigateway-integration:
+        responses:
+          default:
+            statusCode: "200"
+            responseParameters:
+              method.response.header.Access-Control-Allow-Methods: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,x-api-key,x-apikey,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        requestTemplates:
+          application/json: '{"statusCode": 200}'
+        type: "mock"
+        passthroughBehavior: "NEVER"
 x-amazon-apigateway-binary-media-types:
   - multipart/form-data
 components:
@@ -9491,6 +11526,8 @@ components:
           type: string
         impact:
           type: object
+          description: >-
+            Free-form impact/severity scoring for the CVE (e.g. CVSS metrics).
         cpes:
           type: array
           items:
@@ -9499,6 +11536,27 @@ components:
           type: array
           items:
             type: string
+        cisa:
+          type: object
+          nullable: true
+          description: >-
+            CISA enrichment. Present only when this CVE is listed in the CISA
+            Known Exploited Vulnerabilities (KEV) catalog - i.e. it is a known
+            exploited vulnerability; omitted for CVEs that CISA has not flagged.
+            Sourced from the U.S. Cybersecurity and Infrastructure Security
+            Agency (CISA). Mirrors the CISA KEV entry, so besides the fields
+            below it may also carry the other standard KEV fields
+            (vendorProject, product, vulnerabilityName, shortDescription,
+            dueDate, knownRansomwareCampaignUse, notes).
+          additionalProperties: true
+          properties:
+            dateAdded:
+              type: string
+              format: date
+              description: Date this CVE was added to the CISA KEV catalog.
+            requiredAction:
+              type: string
+              description: Remediation action CISA requires for this vulnerability.
 
     VulnFindDetails:
       type: object
@@ -9624,18 +11682,51 @@ components:
     CyclonedxComponent:
       title: CyclonedxComponent
       type: object
-      description: A CycloneDX component (see CycloneDX specification)
+      description: >-
+        A CycloneDX component (see CycloneDX specification). A `type` of
+        `cryptographic-asset` is handled specially: it is not imported as a
+        dependency but round-tripped into the module's crypto properties (CBOM)
+        and linked via the document `dependencies` graph. `additionalProperties`
+        is allowed, so any field defined by the CycloneDX spec may be supplied —
+        including `bom-ref` (the component's unique reference within the BOM, used
+        by the `dependencies` graph), which is accepted but not listed below
+        because its name is not alphanumeric.
       properties:
         type:
           type: string
-          description: Component type (e.g., library, framework, application)
+          description: >-
+            Component type. One of: application, framework, library, container,
+            platform, operating-system, device, device-driver, firmware, file,
+            machine-learning-model, data, cryptographic-asset.
         name:
           type: string
+        group:
+          type: string
+          description: Group/namespace the component belongs to
         version:
+          type: string
+        description:
+          type: string
+        publisher:
+          type: string
+          description: Imported as the component's provider
+        author:
+          type: string
+        copyright:
+          type: string
+        cpe:
           type: string
         purl:
           type: string
           description: Package URL (pkg:type/namespace/name@version)
+        supplier:
+          description: Supplier name (string) or a CycloneDX supplier object with a `name` field
+          oneOf:
+            - type: string
+            - type: object
+              properties:
+                name:
+                  type: string
         licenses:
           type: array
           items:
@@ -9648,8 +11739,16 @@ components:
                     type: string
                   name:
                     type: string
+                  url:
+                    type: string
+              expression:
+                type: string
+                description: SPDX license expression (alternative to a license object)
         hashes:
           type: array
+          description: >-
+            Checksums; the highest-strength algorithm available is imported
+            (priority SHA-512 → SHA-384 → SHA-256 → SHA-1 → MD5).
           items:
             type: object
             properties:
@@ -9657,6 +11756,26 @@ components:
                 type: string
               content:
                 type: string
+        externalReferences:
+          type: array
+          description: >-
+            External references; recognized types are mapped to component URLs —
+            website→homepageUrl, vcs→repoUrl, mailing-list→mailingUrl,
+            issue-tracker→issuesUrl, distribution→distributionUrl,
+            documentation→documentationUrl.
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              url:
+                type: string
+        cryptoProperties:
+          type: object
+          description: >-
+            CycloneDX 1.7 crypto properties; present only when `type` is
+            `cryptographic-asset`. See the CycloneDX specification.
+          additionalProperties: true
       additionalProperties: true
 
     BinaryLink:
@@ -10020,12 +12139,1052 @@ components:
           additionalProperties: true
       description: Module details
 
+    ModuleStatusCounts:
+      title: ModuleStatusCounts
+      type: object
+      properties:
+        warnings:
+          type: integer
+          description: Number of warnings
+          example: 2
+        violations:
+          type: integer
+          description: Number of violations
+          example: 0
+
+    ModuleAnalysisStatistics:
+      title: ModuleAnalysisStatistics
+      type: object
+      properties:
+        licenses:
+          type: integer
+          description: Number of licenses found
+          example: 12
+        components:
+          type: integer
+          description: Number of components found
+          example: 148
+        legal:
+          $ref: '#/components/schemas/ModuleStatusCounts'
+        vulnerability:
+          $ref: '#/components/schemas/ModuleStatusCounts'
+        viability:
+          $ref: '#/components/schemas/ModuleStatusCounts'
+        versioning:
+          $ref: '#/components/schemas/ModuleStatusCounts'
+        integrity:
+          $ref: '#/components/schemas/ModuleStatusCounts'
+        analysisId:
+          type: string
+      description: Warning/violation counts per analysis dimension
+
+    ModuleAnalysisSummary:
+      title: ModuleAnalysisSummary
+      type: object
+      readOnly: true
+      description: >-
+        Latest analysis summary (date, scan and warning/violation statistics per
+        analysis dimension). Read-only — only present in GET responses.
+      properties:
+        _id:
+          type: string
+          description: ID of the analysis document
+          example: Kx2mWfTr8pQnLcVbS
+        date:
+          type: string
+          format: date-time
+          description: Date of the latest analysis
+          example: '2026-05-28T14:32:11.000Z'
+        scanId:
+          type: string
+          description: ID of the scan the analysis is based on
+          example: aR7tNcXzQ4mYpJwHk
+        statistics:
+          $ref: '#/components/schemas/ModuleAnalysisStatistics'
+
+    BWLicenseEntry:
+      title: BWLicenseEntry
+      type: object
+      required:
+        - key
+        - comment
+      properties:
+        key:
+          type: string
+          minLength: 1
+          maxLength: 250
+          description: License key (SPDX identifier, e.g. `MIT`, `Apache-2.0`) or private license key
+          example: Apache-2.0
+        comment:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Reason for adding the entry
+        notApproved:
+          type: boolean
+          description: Set when the entry has not yet been approved by a compliance manager
+      description: License white-/blacklist entry
+
+    BWComponentEntry:
+      title: BWComponentEntry
+      type: object
+      required:
+        - key
+        - version
+        - comment
+      properties:
+        key:
+          type: string
+          minLength: 1
+          maxLength: 250
+          description: Component key, e.g. `npm:lodash` or `mvn:org.apache.commons:commons-lang3`
+          example: 'npm:lodash'
+        version:
+          type: string
+          minLength: 1
+          maxLength: 20
+          pattern: '^(?:[A-Za-z0-9_\.-]+|[A-Za-z0-9_\.-]*\*)$'
+          description: Exact version or wildcard pattern (`1.2.*`, `*`)
+          example: '1.2.*'
+        path:
+          type: string
+          description: Optional dependency path the entry applies to
+        status:
+          type: string
+          description: Target status, used for entries in `changedStatus`
+        comment:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Reason for adding the entry
+      description: Component list entry (white-/blacklist, unchanged, loose-coupled, changed status)
+
+    SelectedLicenseEntry:
+      title: SelectedLicenseEntry
+      type: object
+      required:
+        - key
+        - version
+        - comment
+      properties:
+        key:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Component key
+        version:
+          type: string
+          minLength: 1
+          maxLength: 20
+          pattern: '^(?:[A-Za-z0-9_\.-]+|[A-Za-z0-9_\.-]*\*)$'
+          description: Exact version or wildcard pattern (`1.2.*`, `*`)
+          example: '1.2.*'
+        path:
+          type: string
+          description: Optional dependency path the selection applies to
+        license:
+          type: string
+          description: License key selected as effective for this component
+        comment:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Reason for the license selection
+      description: Effective-license selection for a multi-licensed component
+
+    BWCveEntry:
+      title: BWCveEntry
+      type: object
+      required:
+        - cveKey
+        - key
+        - version
+        - comment
+      properties:
+        cveKey:
+          type: string
+          minLength: 1
+          maxLength: 250
+          description: CVE identifier
+          example: CVE-2021-44228
+        key:
+          type: string
+          minLength: 1
+          maxLength: 250
+          description: Component key the entry applies to
+        version:
+          type: string
+          minLength: 1
+          maxLength: 20
+          pattern: '^(?:[A-Za-z0-9_\.-]+|[A-Za-z0-9_\.-]*\*)$'
+          description: Exact version or wildcard pattern (`1.2.*`, `*`)
+          example: '1.2.*'
+        path:
+          type: string
+          description: Optional dependency path the entry applies to
+        comment:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Reason for white-/blacklisting the CVE
+      description: CVE white-/blacklist entry
+
+    ObligationEntry:
+      title: ObligationEntry
+      type: object
+      required:
+        - obligationKey
+        - comment
+      properties:
+        obligationKey:
+          type: string
+          minLength: 1
+          maxLength: 250
+          description: Key of the obligation the entry applies to
+        key:
+          type: string
+          minLength: 1
+          maxLength: 250
+          description: Optional component key to narrow the entry to a single component
+        version:
+          type: string
+          minLength: 1
+          maxLength: 20
+          pattern: '^(?:[A-Za-z0-9_\.-]+|[A-Za-z0-9_\.-]*\*)$'
+          description: Exact version or wildcard pattern (`1.2.*`, `*`)
+          example: '1.2.*'
+        path:
+          type: string
+          description: Optional dependency path the entry applies to
+        comment:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Reason for the obligation handling
+      description: Obligation handling entry
+
+    LegalRulesEntry:
+      title: LegalRulesEntry
+      type: object
+      required:
+        - ruleKey
+        - comment
+      properties:
+        ruleKey:
+          type: string
+          minLength: 1
+          maxLength: 250
+          description: Key of the legal rule the entry applies to
+        key:
+          type: string
+          minLength: 1
+          maxLength: 250
+          description: Optional component key to narrow the entry to a single component
+        version:
+          type: string
+          minLength: 1
+          maxLength: 20
+          pattern: '^(?:[A-Za-z0-9_\.-]+|[A-Za-z0-9_\.-]*\*)$'
+          description: Exact version or wildcard pattern (`1.2.*`, `*`)
+          example: '1.2.*'
+        path:
+          type: string
+          description: Optional dependency path the entry applies to
+        comment:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Reason for the legal rule exception
+      description: Legal rule exception entry
+
+    LicenseConfig:
+      title: LicenseConfig
+      type: object
+      required:
+        - whitelist
+        - blacklist
+      properties:
+        whitelist:
+          type: array
+          description: Licenses explicitly allowed
+          items:
+            $ref: '#/components/schemas/BWLicenseEntry'
+        blacklist:
+          type: array
+          description: Licenses explicitly forbidden
+          items:
+            $ref: '#/components/schemas/BWLicenseEntry'
+      description: >-
+        License white-/blacklists. Both lists are required when the object is
+        provided — send empty arrays to clear a list.
+
+    ModuleComponentConfig:
+      title: ModuleComponentConfig
+      type: object
+      properties:
+        whitelist:
+          type: array
+          description: Components explicitly allowed
+          items:
+            $ref: '#/components/schemas/BWComponentEntry'
+        blacklist:
+          type: array
+          description: Components explicitly forbidden
+          items:
+            $ref: '#/components/schemas/BWComponentEntry'
+        unchanged:
+          type: array
+          description: Components declared as used unchanged (relevant for obligation resolution)
+          items:
+            $ref: '#/components/schemas/BWComponentEntry'
+        looseCoupled:
+          type: array
+          description: Components declared as loosely coupled (relevant for copyleft evaluation)
+          items:
+            $ref: '#/components/schemas/BWComponentEntry'
+        licensesSelected:
+          type: array
+          description: Effective-license selections for multi-licensed components
+          items:
+            $ref: '#/components/schemas/SelectedLicenseEntry'
+        changedStatus:
+          type: array
+          description: Components with manually overridden analysis status
+          items:
+            $ref: '#/components/schemas/BWComponentEntry'
+      description: Component-level settings of the module
+
+    CveConfig:
+      title: CveConfig
+      type: object
+      required:
+        - whitelist
+        - blacklist
+      properties:
+        whitelist:
+          type: array
+          description: CVEs accepted/ignored during vulnerability analysis
+          items:
+            $ref: '#/components/schemas/BWCveEntry'
+        blacklist:
+          type: array
+          description: CVEs explicitly flagged
+          items:
+            $ref: '#/components/schemas/BWCveEntry'
+      description: >-
+        CVE white-/blacklists. Both lists are required when the object is
+        provided — send empty arrays to clear a list.
+
+    ModuleViabilityConfig:
+      title: ModuleViabilityConfig
+      type: object
+      required:
+        - warningThreshold
+        - violationThreshold
+        - minConfidence
+        - noInfoLevel
+      properties:
+        enabled:
+          type: boolean
+          description: Enables/disables viability analysis for this module
+        warningThreshold:
+          type: integer
+          minimum: 0
+          maximum: 4
+          description: >-
+            Activity level below which a warning is raised.
+            0 = no monitoring, 1 = very low activity, 2 = low activity,
+            3 = normal activity, 4 = very active.
+            Must not be lower than `violationThreshold` (unless 0).
+        violationThreshold:
+          type: integer
+          minimum: 0
+          maximum: 4
+          description: >-
+            Activity level below which a violation is raised. Same scale as
+            `warningThreshold`.
+        minConfidence:
+          type: integer
+          minimum: 1
+          maximum: 3
+          description: Minimum number of indicators (1-3) required to rate viability
+        noInfoLevel:
+          type: integer
+          minimum: 1
+          maximum: 3
+          description: >-
+            Status reported when the minimum confidence level is not reached.
+            1 = OK, 2 = Warning, 3 = Violation
+      description: Viability (project activity) analysis settings
+
+    ModuleOssfConfig:
+      title: ModuleOssfConfig
+      type: object
+      required:
+        - warningThreshold
+        - violationThreshold
+        - noInfoLevel
+      properties:
+        enabled:
+          type: boolean
+          description: Enables/disables OpenSSF Scorecard analysis for this module
+        warningThreshold:
+          type: integer
+          minimum: 0
+          maximum: 9
+          description: >-
+            OpenSSF Scorecard score below which a warning is raised
+            (0 = no monitoring). Must not be lower than `violationThreshold` (unless 0).
+        violationThreshold:
+          type: integer
+          minimum: 0
+          maximum: 9
+          description: OpenSSF Scorecard score below which a violation is raised (0 = no monitoring)
+        noInfoLevel:
+          type: integer
+          minimum: 1
+          maximum: 3
+          description: >-
+            Status reported when no score is available.
+            1 = OK, 2 = Warning, 3 = Violation
+      description: OpenSSF Scorecard analysis settings
+
+    ModuleVersioningConfig:
+      title: ModuleVersioningConfig
+      type: object
+      required:
+        - jump
+        - warningThreshold
+        - violationThreshold
+      properties:
+        enabled:
+          type: boolean
+          description: Enables/disables versioning analysis for this module
+        jump:
+          type: boolean
+          description: Enables version-jump detection
+        warningThreshold:
+          type: integer
+          minimum: 0
+          maximum: 3
+          description: >-
+            How far behind the latest version a component may be before a warning is raised.
+            0 = no monitoring, 1 = more than 7 versions behind, 2 = 4-6 versions behind,
+            3 = less than 3 versions behind.
+            Must not be lower than `violationThreshold` (unless 0).
+        violationThreshold:
+          type: integer
+          minimum: 0
+          maximum: 3
+          description: >-
+            How far behind the latest version a component may be before a violation is
+            raised. Same scale as `warningThreshold`.
+      description: Versioning (outdated components) analysis settings
+
+    ModuleRequirements:
+      title: ModuleRequirements
+      type: object
+      required:
+        - TS
+        - LS
+        - D
+      properties:
+        TS:
+          type: string
+          enum: [TS_y, TS_n]
+          description: >-
+            Trade secret protection.
+            TS_y = trade secrets need to be protected,
+            TS_n = trade secrets may be released
+        LS:
+          type: string
+          enum: [LS_pl, LS_os]
+          description: >-
+            Sub-licensing.
+            LS_pl = module shall be licensed under a proprietary license,
+            LS_os = module is planned to be released as open source
+        D:
+          type: string
+          enum: [D_op, D_ipoa, D_xa, D_cslib, D_sslib, D_never]
+          description: >-
+            Distribution model — determines which obligations are resolved.
+            D_op = distributed for on-premise use (installer, physical media or download),
+            D_ipoa = integral part of a shipped appliance/device/software,
+            D_xa = exchangeable addon to a shipped appliance/device/software,
+            D_cslib = client-side library in a web solution,
+            D_sslib = server-side library in a web solution (not distributed),
+            D_never = applied just locally, not distributed at all
+      description: Compliance requirements driving obligation resolution
+
+    CIARequirements:
+      title: CIARequirements
+      type: object
+      required:
+        - CR
+        - IR
+        - AR
+      properties:
+        CR:
+          type: string
+          enum: [X, L, M, H]
+          description: 'Confidentiality requirement: X = not defined, L = low, M = medium, H = high'
+        IR:
+          type: string
+          enum: [X, L, M, H]
+          description: 'Integrity requirement: X = not defined, L = low, M = medium, H = high'
+        AR:
+          type: string
+          enum: [X, L, M, H]
+          description: 'Availability requirement: X = not defined, L = low, M = medium, H = high'
+      description: CIA requirements used as CVSS environmental modifiers
+
+    Classification:
+      title: Classification
+      type: object
+      properties:
+        MDR:
+          type: string
+          enum: ['', I, IIa, IIb, III]
+          description: >-
+            Medical Device Regulation risk class.
+            I = low risk (e.g. passive objects), IIa = medium risk (outside body, not life
+            supporting), IIb = higher risk (life supportive but outside body),
+            III = high risk (e.g. in blood). Empty string = none
+        IVDR:
+          type: string
+          enum: ['', A, B, C, D]
+          description: >-
+            In-vitro Diagnostic Regulation risk class.
+            A = low individual risk and low risk to public health,
+            B = moderate individual risk and/or low risk to public health,
+            C = high individual risk and/or medium risk to public health,
+            D = high individual and/or high risk to public health. Empty string = none
+      description: Regulatory classification of the module
+
+    ModuleProperties:
+      title: ModuleProperties
+      type: object
+      properties:
+        architectureType:
+          type: string
+          enum: [FEU, FEE, FES, BES, BEE, SC, IS, DC]
+          description: >-
+            Type of architecture.
+            FEU = Frontend-UI-Module, FEE = Frontend-Endpoint, FES = Frontend-Service,
+            BES = Backend-Service, BEE = Backend-Endpoint, SC = System component,
+            IS = Infrastructure Service, DC = Distributable Component
+        architecture:
+          type: string
+          enum: [infrastructureModule, infrastructureTemplate, sourceCode]
+          description: Module kind
+        privacy:
+          type: string
+          enum: [opensource, private]
+          description: Whether the module itself is open source or private
+      description: Architectural properties of the module
+
+    ModuleEnvironmentalConfig:
+      title: ModuleEnvironmentalConfig
+      type: object
+      properties:
+        v2vectorString:
+          type: string
+          description: CVSS v2 environmental vector string applied when re-scoring vulnerabilities
+        v3vectorString:
+          type: string
+          description: CVSS v3 environmental vector string applied when re-scoring vulnerabilities
+        v4vectorString:
+          type: string
+          description: CVSS v4 environmental vector string applied when re-scoring vulnerabilities
+      description: CVSS environmental re-scoring settings
+
+    EnvironmentalContext:
+      title: EnvironmentalContext
+      type: object
+      description: >-
+        A module's CVSS environmental (iCVSS) context - the read-only projection
+        returned by the environmental-context endpoints. ciaRequirements is null
+        when the module has none (the stored discrete letters are passed through
+        verbatim, never synthesized). environmentalConfig always carries all three
+        vector keys, each null when absent. mav is the Modified Attack Vector
+        parsed from the v4 (then v3) vector, and is null when neither carries a
+        MAV token (or the MAV is X); the v2 vector is never inspected for MAV.
+      properties:
+        moduleId:
+          type: string
+        projectId:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+        ciaRequirements:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/CIARequirements'
+        environmentalConfig:
+          type: object
+          properties:
+            v2vectorString:
+              type: string
+              nullable: true
+            v3vectorString:
+              type: string
+              nullable: true
+            v4vectorString:
+              type: string
+              nullable: true
+        mav:
+          type: string
+          nullable: true
+          enum: [N, A, L, P]
+          description: 'Modified Attack Vector: N = Network, A = Adjacent, L = Local, P = Physical; null when absent / not-defined'
+
+    EndoflifePolicy:
+      title: EndoflifePolicy
+      type: object
+      required:
+        - warningThreshold
+        - violationThreshold
+      properties:
+        enabled:
+          type: boolean
+          description: Enables/disables end-of-life analysis
+        warningThreshold:
+          type: integer
+          minimum: 0
+          maximum: 24
+          description: >-
+            Months before component end-of-life at which a warning is raised
+            (0 = no monitoring). Must not be lower than `violationThreshold` (unless 0).
+        violationThreshold:
+          type: integer
+          minimum: 0
+          maximum: 24
+          description: Months before component end-of-life at which a violation is raised (0 = no monitoring)
+      description: End-of-life policy settings
+
+    CustomComponentEntry:
+      title: CustomComponentEntry
+      type: object
+      required:
+        - key
+        - version
+        - comment
+      properties:
+        key:
+          type: string
+          minLength: 1
+          maxLength: 250
+          description: Component key
+        version:
+          type: string
+          minLength: 1
+          maxLength: 20
+          pattern: '^(?:[A-Za-z0-9_\.-]+|[A-Za-z0-9_\.-]*\*)$'
+          description: Exact version or wildcard pattern (`1.2.*`, `*`)
+          example: '1.2.*'
+        comment:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Reason for attaching the component
+      description: Custom component manually attached to the module
+
+    ModuleSettings:
+      title: ModuleSettings
+      type: object
+      description: >-
+        All module settings manageable via the API. The read-only fields
+        `_id`, `status` and `analysis` are only present in GET responses and
+        are ignored when sent in requests.
+      properties:
+        _id:
+          type: string
+          readOnly: true
+          description: the module id
+          example: vewfCuCmkpqXyuDrX
+        status:
+          type: string
+          readOnly: true
+          description: Overall module status
+          enum: [ok, warnings, violations]
+          example: warnings
+        analysis:
+          $ref: '#/components/schemas/ModuleAnalysisSummary'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Module name. Must not contain `<` or `>`
+          example: payment-service
+        version:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Module version
+          example: 2.4.0
+        description:
+          type: string
+          maxLength: 2000
+          description: Module description
+          example: Backend payment processing service
+        moduleIdentifier:
+          type: string
+          maxLength: 200
+          description: Module identifier used to match incoming scans to this module
+          example: 'payment-service'
+        projectId:
+          type: string
+          description: ID of the project the module is assigned to
+          example: q3edXmFkB2sJzu9aM
+        tags:
+          type: array
+          description: Tag IDs assigned to the module (IDs, not tag names)
+          items:
+            type: string
+        confidenceMinScore:
+          type: string
+          enum: ['1', '4', '5']
+          description: >-
+            Default confidence level for license findings.
+            5 = high only, 4 = medium and higher, 1 = all
+        licenseConfig:
+          $ref: '#/components/schemas/LicenseConfig'
+        componentConfig:
+          $ref: '#/components/schemas/ModuleComponentConfig'
+        viabilityConfig:
+          $ref: '#/components/schemas/ModuleViabilityConfig'
+        ossfConfig:
+          $ref: '#/components/schemas/ModuleOssfConfig'
+        versioningConfig:
+          $ref: '#/components/schemas/ModuleVersioningConfig'
+        cveConfig:
+          $ref: '#/components/schemas/CveConfig'
+        obligationConfig:
+          type: array
+          description: Obligation handling entries
+          items:
+            $ref: '#/components/schemas/ObligationEntry'
+        legalRulesConfig:
+          type: array
+          description: Legal rule exception entries
+          items:
+            $ref: '#/components/schemas/LegalRulesEntry'
+        requirements:
+          $ref: '#/components/schemas/ModuleRequirements'
+        ciaRequirements:
+          $ref: '#/components/schemas/CIARequirements'
+        classification:
+          $ref: '#/components/schemas/Classification'
+        properties:
+          $ref: '#/components/schemas/ModuleProperties'
+        environmentalConfig:
+          $ref: '#/components/schemas/ModuleEnvironmentalConfig'
+        endoflifePolicy:
+          $ref: '#/components/schemas/EndoflifePolicy'
+        customComponents:
+          type: array
+          description: Custom components manually attached to the module
+          items:
+            $ref: '#/components/schemas/CustomComponentEntry'
+
+    RequestBodyUpdateModule:
+      title: RequestBodyUpdateModule
+      description: >-
+        Module settings to update. All fields are optional — only provided fields are
+        updated, but each provided top-level field replaces the stored value as a whole.
+      allOf:
+        - $ref: '#/components/schemas/ModuleSettings'
+
+    ProjectComponentConfig:
+      title: ProjectComponentConfig
+      type: object
+      required:
+        - whitelist
+        - blacklist
+        - unchanged
+        - looseCoupled
+      properties:
+        whitelist:
+          type: array
+          description: Components explicitly allowed
+          items:
+            $ref: '#/components/schemas/BWComponentEntry'
+        blacklist:
+          type: array
+          description: Components explicitly forbidden
+          items:
+            $ref: '#/components/schemas/BWComponentEntry'
+        unchanged:
+          type: array
+          description: Components declared as used unchanged (relevant for obligation resolution)
+          items:
+            $ref: '#/components/schemas/BWComponentEntry'
+        looseCoupled:
+          type: array
+          description: Components declared as loosely coupled (relevant for copyleft evaluation)
+          items:
+            $ref: '#/components/schemas/BWComponentEntry'
+      description: >-
+        Component-level settings of the project. All four lists are required when the
+        object is provided — send empty arrays to clear a list.
+
+    ProjectRequirements:
+      title: ProjectRequirements
+      type: object
+      required:
+        - CA
+        - OM
+        - IP_protect
+        - IP_enforce
+      properties:
+        CA:
+          type: string
+          enum: [CA_usage, CA_license, CA_support, CA_other, CA_none]
+          description: >-
+            Commercial application.
+            CA_usage = usage fee charged for the product/service,
+            CA_license = license fee charged (royalties or other fees),
+            CA_support = only a support fee charged for additional services,
+            CA_other = other commercialisation (e.g. maintenance or warranty),
+            CA_none = product is not commercial
+        OM:
+          type: string
+          enum: [OM_SaaS, OM_mop, OM_sw, OM_dis]
+          description: >-
+            Operational model.
+            OM_SaaS = operated as Software as a Service,
+            OM_mop = operated at customer locations as a managed service,
+            OM_sw = traditional software-distribution model,
+            OM_dis = part of an appliance / embedded in a device or hardware
+        IP_protect:
+          type: string
+          enum: [IP_protect_n, IP_protect_y]
+          description: >-
+            Inbound IP protection.
+            IP_protect_n = no extended protection from 3rd-party claims sought,
+            IP_protect_y = explicitly reduce risk of patent claims by OSS contributors
+        IP_enforce:
+          type: string
+          enum: [IP_enforce_1, IP_enforce_2, IP_enforce_3]
+          description: >-
+            Outbound IP protection.
+            IP_enforce_1 = no enforcement of own claims sought,
+            IP_enforce_2 = retain freedom to enforce own patent claims without
+            risk of license termination,
+            IP_enforce_3 = ensure freedom to enforce own patent claims without
+            risk of license termination
+      description: Compliance requirements driving obligation resolution on project level
+
+    ProjectJiraSettings:
+      title: ProjectJiraSettings
+      type: object
+      writeOnly: true
+      description: >-
+        Jira integration settings. Write-only — contains credentials and is
+        never returned by GET
+      required:
+        - active
+      properties:
+        url:
+          type: string
+          description: Jira base URL
+        user:
+          type: string
+          description: Jira user name
+        passwd:
+          type: string
+          description: Jira password/API token
+        key:
+          type: string
+          description: Jira project key
+        type:
+          type: string
+          description: Jira issue type
+        email:
+          type: string
+          description: Jira account e-mail
+        active:
+          type: boolean
+          description: Enables/disables the integration
+
+    ProjectTfsSettings:
+      title: ProjectTfsSettings
+      type: object
+      writeOnly: true
+      description: >-
+        Azure DevOps / TFS integration settings. Write-only — contains
+        credentials and is never returned by GET
+      required:
+        - account
+        - project
+        - token
+        - active
+      properties:
+        account:
+          type: string
+          description: Azure DevOps / TFS account
+        project:
+          type: string
+          description: Azure DevOps / TFS project
+        token:
+          type: string
+          description: Personal access token
+        active:
+          type: boolean
+          description: Enables/disables the integration
+
+    ProjectGithubSettings:
+      title: ProjectGithubSettings
+      type: object
+      writeOnly: true
+      description: >-
+        GitHub integration settings. Write-only — contains credentials and is
+        never returned by GET
+      required:
+        - token
+        - repository
+        - active
+      properties:
+        token:
+          type: string
+          description: GitHub access token
+        repository:
+          type: string
+          description: GitHub repository (owner/name)
+        active:
+          type: boolean
+          description: Enables/disables the integration
+
+    ProjectSettings:
+      title: ProjectSettings
+      type: object
+      description: >-
+        All project settings manageable via the API (integration credentials
+        excluded from responses). The read-only field `_id` is only present in
+        GET responses and is ignored when sent in requests.
+      properties:
+        _id:
+          type: string
+          readOnly: true
+          description: the project id
+          example: q3edXmFkB2sJzu9aM
+        name:
+          type: string
+          minLength: 3
+          maxLength: 200
+          description: Project name. Must not contain `<` or `>`
+          example: webshop-platform
+        description:
+          type: string
+          maxLength: 2000
+          description: Project description / application goals
+          example: Customer-facing webshop platform
+        requireWhitelist:
+          type: boolean
+          description: >-
+            Allow-list mode — when true, components must be explicitly whitelisted
+            to be accepted
+        tags:
+          type: array
+          description: Tag IDs assigned to the project (IDs, not tag names)
+          items:
+            type: string
+        confidenceMinScore:
+          type: string
+          enum: ['1', '4', '5']
+          description: >-
+            Default confidence level for license findings.
+            5 = high only, 4 = medium and higher, 1 = all
+        licenseConfig:
+          $ref: '#/components/schemas/LicenseConfig'
+        componentConfig:
+          $ref: '#/components/schemas/ProjectComponentConfig'
+        cveConfig:
+          $ref: '#/components/schemas/CveConfig'
+        obligationConfig:
+          type: array
+          description: Obligation handling entries
+          items:
+            $ref: '#/components/schemas/ObligationEntry'
+        legalRulesConfig:
+          type: array
+          description: Legal rule exception entries
+          items:
+            $ref: '#/components/schemas/LegalRulesEntry'
+        requirements:
+          $ref: '#/components/schemas/ProjectRequirements'
+        ciaRequirements:
+          $ref: '#/components/schemas/CIARequirements'
+        classification:
+          $ref: '#/components/schemas/Classification'
+        endoflifePolicy:
+          $ref: '#/components/schemas/EndoflifePolicy'
+        jira:
+          $ref: '#/components/schemas/ProjectJiraSettings'
+        tfs:
+          $ref: '#/components/schemas/ProjectTfsSettings'
+        github:
+          $ref: '#/components/schemas/ProjectGithubSettings'
+
+    RequestBodyCreateProject:
+      title: RequestBodyCreateProject
+      description: Project to create. `name` is required, all other settings are optional.
+      allOf:
+        - type: object
+          required:
+            - name
+        - $ref: '#/components/schemas/ProjectSettings'
+
+    RequestBodyUpdateProject:
+      title: RequestBodyUpdateProject
+      description: >-
+        Project settings to update. All fields are optional — only provided fields are
+        updated, but each provided top-level field replaces the stored value as a whole.
+      allOf:
+        - $ref: '#/components/schemas/ProjectSettings'
+
     Generic200:
       type: object
       properties:
         status:
           type: string
           example: "ok"
+
+    CyclonedxDocument:
+      title: CyclonedxDocument
+      type: object
+      description: >-
+        A CycloneDX 1.7 BOM document. The AIBOM variant carries
+        `machine-learning-model` components (with `modelCard`); the CBOM variant
+        carries `cryptographic-asset` components. `additionalProperties` is allowed,
+        so any field defined by the CycloneDX spec may be present.
+      properties:
+        bomFormat:
+          type: string
+          example: CycloneDX
+        specVersion:
+          type: string
+          example: "1.7"
+        serialNumber:
+          type: string
+        version:
+          type: number
+        metadata:
+          type: object
+          description: CycloneDX metadata block (see CycloneDX specification)
+          additionalProperties: true
+        components:
+          type: array
+          items:
+            $ref: '#/components/schemas/CyclonedxComponent'
+        dependencies:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+      additionalProperties: true
 
     ResponseCreateScan200:
       title: Scan created
@@ -10064,8 +13223,180 @@ components:
           items:
             $ref: '#/components/schemas/Component'
 
+    Countermeasure:
+      title: Countermeasure
+      type: object
+      required:
+        - countermeasure
+      properties:
+        _id:
+          type: string
+          description: >-
+            Server-generated countermeasure identifier — assigned on create,
+            ignored when sent in a request body
+          example: Hk6cesvWdoX5Yqbo8
+        countermeasure:
+          type: string
+          minLength: 3
+          maxLength: 200
+          description: >-
+            Countermeasure name — must be 3-200 characters, `<` and `>` are not allowed
+          example: Upgrade to patched version
+        status:
+          type: string
+          enum: ['', identified, planned, completed, ok, required, not-required, verified]
+          description: Implementation status of the countermeasure
+        comment:
+          type: string
+          description: Optional comment
+        responsible:
+          type: array
+          description: User IDs of the responsible users
+          items:
+            type: string
+        riskReduction:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: Estimated risk reduction in percent
+          example: 90
+        standardRef:
+          type: string
+          maxLength: 200
+          description: Reference to a security standard or control
+          example: OWASP-ASVS V5.3.4
+        validationMethod:
+          type: string
+          maxLength: 200
+          description: How the effectiveness of the countermeasure is validated
+          example: 'test-suite: tests/security/sqli_test.py'
+        otmMitigationId:
+          type: string
+          maxLength: 200
+          description: Open Threat Model mitigation identifier
+          example: m-prepared-statements
+      description: Risk countermeasure entry
+
+    ThreatModelContext:
+      title: Threat model context
+      type: object
+      description: Threat-modelling context of a risk (STRIDE / ENISA / CWE / OTM references)
+      properties:
+        strideCategories:
+          type: array
+          description: STRIDE threat categories
+          items:
+            type: string
+          example: [Tampering, Elevation of Privilege]
+        enisaCategory:
+          type: string
+          maxLength: 200
+          description: ENISA threat taxonomy category
+          example: Nefarious activity / Abuse
+        enisaThreat:
+          type: string
+          maxLength: 300
+          description: ENISA threat name
+          example: Web-application / injection attacks (SQLi, XSS)
+        cwes:
+          type: array
+          description: Related CWE identifiers
+          items:
+            type: string
+          example: [CWE-89, CWE-79]
+        affectedElementType:
+          type: string
+          maxLength: 100
+          description: Type of the affected threat-model element
+          example: process
+        trustBoundaryCrossing:
+          type: boolean
+          description: Whether the threat crosses a trust boundary
+        tmRunId:
+          type: string
+          maxLength: 200
+          description: Identifier of the threat-modelling run that produced this risk
+          example: tm-run-2026-06-04-001
+        tmMethod:
+          type: string
+          maxLength: 200
+          description: Threat-modelling method used
+          example: STRIDE-per-Element
+        otmThreatId:
+          type: string
+          maxLength: 200
+          description: Open Threat Model threat identifier
+          example: t-sqli-login
+
+    ThreatModelSummary:
+      title: Threat model summary
+      type: object
+      description: Diff/roll-up counters the TM agent attaches to a run
+      properties:
+        totalThreats: {type: integer, minimum: 0, example: 23}
+        newThreats: {type: integer, minimum: 0, example: 3}
+        updatedThreats: {type: integer, minimum: 0, example: 1}
+        unchangedThreats: {type: integer, minimum: 0, example: 19}
+        removedThreats: {type: integer, minimum: 0, example: 0}
+        totalCountermeasures: {type: integer, minimum: 0, example: 41}
+        newCountermeasures: {type: integer, minimum: 0, example: 5}
+        implementedCountermeasures: {type: integer, minimum: 0, example: 28}
+
+    ThreatModelDocument:
+      title: Threat model document
+      type: object
+      description: >-
+        A stored per-project threat-model document snapshot (OTM or Threat
+        Dragon). `content` and `format` are always present and are the
+        authoritative parse contract (the consumer parses `content` per
+        `format`). `formatVersion` and `summary` are optional and may be absent,
+        so consumers must not depend on them. `companyId` is never returned.
+      required:
+        - content
+        - format
+      properties:
+        _id:
+          type: string
+        projectId:
+          type: string
+        threatModelId:
+          type: string
+          description: Optional link to the editable per-project threat model
+        created:
+          type: string
+          format: date-time
+        userId:
+          type: string
+        userName:
+          type: string
+        tmRunId:
+          type: string
+          maxLength: 200
+          example: tm-run-2026-06-04-001
+        previousTmRunId:
+          type: string
+          maxLength: 200
+          example: tm-run-2026-06-03-001
+        format:
+          type: string
+          enum: [otm, threat-dragon]
+          default: otm
+        formatVersion:
+          type: string
+          maxLength: 50
+          example: 0.2.0
+        content:
+          type: string
+          description: Complete document payload (OTM YAML / Threat Dragon JSON), up to 5 MB
+        status:
+          type: string
+          enum: [draft, reviewed, approved]
+          default: draft
+        summary:
+          $ref: '#/components/schemas/ThreatModelSummary'
+
     Risk:
-      title: Project
+      title: Risk
       type: object
       required:
         - _id
@@ -10078,6 +13409,11 @@ components:
         created:
           type: string
           format: date-time
+        edited:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Set automatically on every update
         projectId:
           type: string
         moduleId:
@@ -10087,31 +13423,20 @@ components:
         riskProperties:
           title: Risk properties
           type: object
-          required:
-            - origin
-            - countermeasures
           properties:
             origin:
               type: array
+              description: >-
+                Risk origin tags. `TMA Assessment` is used for
+                threat-model-agent risks.
               items:
                 type: string
+                enum: ['', SDLC, SQ, SSC, CVE, YARA, CWE, TD,
+                       'TMA Assessment', 'threat-model']
             countermeasures:
               type: array
               items:
-                type: object
-                required:
-                  - responsible
-                properties:
-                  countermeasure:
-                    type: string
-                  status:
-                    type: string
-                  comment:
-                    type: string
-                  responsible:
-                    type: array
-                    items:
-                      type: string
+                $ref: '#/components/schemas/Countermeasure'
             generalApproach:
               type: string
             impactClass:
@@ -10128,6 +13453,9 @@ components:
               type: string
             state:
               type: string
+              enum: ['', identified, assessed, approved, planned, implementing,
+                     monitored, accepted, closed, deferred, escalated, expired,
+                     transferred, eliminated, out-of-scope]
             BV:
               type: string
             BV_enum:
@@ -10140,6 +13468,8 @@ components:
               type: string
             ARO_enum:
               type: string
+            threatModelContext:
+              $ref: '#/components/schemas/ThreatModelContext'
 
     Task:
       title: Task
@@ -10185,6 +13515,125 @@ components:
           type: string
         description:
           type: string
+
+    SARIFDocumentSummary:
+      title: SARIF document summary
+      type: object
+      properties:
+        _id:
+          type: string
+        type:
+          type: string
+          example: SARIF
+        origin:
+          type: string
+          description: Name of the tool that produced the run (e.g. semgrep)
+        submitted:
+          type: string
+          format: date-time
+          description: Import date
+        status:
+          type: string
+        projectName:
+          type: string
+        moduleName:
+          type: string
+        moduleId:
+          type: string
+        scanId:
+          type: string
+        analysisId:
+          type: string
+        rules:
+          type: object
+          description: Distinct rules that fired, per severity
+          properties:
+            total:
+              type: integer
+            violations:
+              type: integer
+            warnings:
+              type: integer
+            notes:
+              type: integer
+        findings:
+          type: object
+          description: Number of findings (SARIF results), per severity
+          properties:
+            total:
+              type: integer
+            violations:
+              type: integer
+            warnings:
+              type: integer
+            notes:
+              type: integer
+
+    SARIFDocument:
+      title: SARIFDocument
+      type: object
+      description: >-
+        Imported SARIF document: the summary metadata plus the stored run
+        wrapped in a SARIF envelope (`sarif.runs[0]`).
+      properties:
+        _id:
+          type: string
+        type:
+          type: string
+          example: SARIF
+        origin:
+          type: string
+          description: Name of the tool that produced the run (e.g. semgrep)
+        submitted:
+          type: string
+          format: date-time
+          description: Import date
+        status:
+          type: string
+        projectName:
+          type: string
+        moduleName:
+          type: string
+        moduleId:
+          type: string
+        scanId:
+          type: string
+        analysisId:
+          type: string
+        rules:
+          type: object
+          description: Distinct rules that fired, per severity
+          properties:
+            total:
+              type: integer
+            violations:
+              type: integer
+            warnings:
+              type: integer
+            notes:
+              type: integer
+        findings:
+          type: object
+          description: Number of findings (SARIF results), per severity
+          properties:
+            total:
+              type: integer
+            violations:
+              type: integer
+            warnings:
+              type: integer
+            notes:
+              type: integer
+        sarif:
+          type: object
+          description: SARIF envelope with the stored run
+          properties:
+            version:
+              type: string
+            runs:
+              type: array
+              items:
+                $ref: '#/components/schemas/SARIFRun'
 
     SARIFRun:
       title: SARIF run
