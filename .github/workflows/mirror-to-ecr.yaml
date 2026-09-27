@@ -1,0 +1,101 @@
+name: Mirror image to ECR
+
+# The image is built, scanned and published in the public repository
+# (TrustSource/ts-mcp -> Docker Hub). Nothing is rebuilt here: this workflow
+# copies an already-published, already-gated image into our ECR registry, so
+# that ECS pulls from a registry we control and the deployed version stays
+# traceable.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_tag:
+        description: "Docker Hub tag to mirror (a released version like 0.3.0, or 'main' for the rolling DEV build)"
+        required: true
+        type: string
+      also_latest:
+        description: "Also move :latest in ECR (only meaningful for a released version)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  SOURCE_IMAGE: trustsource/ts-mcp
+
+jobs:
+  mirror:
+    name: Mirror ${{ inputs.source_tag }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.source_tag }}"
+          if ! printf '%s' "$TAG" | grep -qE '^([0-9]+\.[0-9]+\.[0-9]+|main)$'; then
+            echo "::error::source_tag must be a semantic version (1.2.3) or 'main'. Got: $TAG"
+            exit 1
+          fi
+          if [ "$TAG" = "main" ] && [ "${{ inputs.also_latest }}" = "true" ]; then
+            echo "::error::Refusing to point :latest at a rolling branch build."
+            exit 1
+          fi
+          if [ -z "${{ vars.ECR_REPOSITORY }}" ]; then
+            echo "::error::Repository variable ECR_REPOSITORY must be set (the ECR repository name, e.g. ts-mcp)."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ECR_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
+
+      # The registry host comes from the login step rather than a configured
+      # variable: it is by construction the registry these credentials are good
+      # for. A hand-set registry in another account would push with a valid
+      # login to the wrong destination.
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Verify the source image exists
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "${SOURCE_IMAGE}:${{ inputs.source_tag }}" > /dev/null
+          echo "Found ${SOURCE_IMAGE}:${{ inputs.source_tag }}"
+
+      # `imagetools create` copies the manifest registry-to-registry. Layers are
+      # never pulled to the runner, and a multi-arch manifest stays intact — a
+      # docker pull/tag/push would silently flatten it to the runner's platform.
+      - name: Copy to ECR
+        run: |
+          set -euo pipefail
+          SRC="${SOURCE_IMAGE}:${{ inputs.source_tag }}"
+          DEST="${{ steps.login-ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}"
+          TAGS="-t ${DEST}:${{ inputs.source_tag }}"
+
+          # A released version also gets the floating minor tag, mirroring what
+          # the public publish workflow puts on Docker Hub.
+          if printf '%s' "${{ inputs.source_tag }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            MINOR="$(printf '%s' "${{ inputs.source_tag }}" | cut -d. -f1,2)"
+            TAGS="$TAGS -t ${DEST}:${MINOR}"
+          fi
+
+          if [ "${{ inputs.also_latest }}" = "true" ]; then
+            TAGS="$TAGS -t ${DEST}:latest"
+          fi
+
+          echo "Copying $SRC -> $TAGS"
+          docker buildx imagetools create $TAGS "$SRC"
+
+      - name: Show what is now in ECR
+        run: |
+          aws ecr describe-images \
+            --repository-name "${{ vars.ECR_REPOSITORY }}" \
+            --query "reverse(sort_by(imageDetails,&imagePushedAt))[:10].{pushed:imagePushedAt,tags:imageTags}" \
+            --output table
