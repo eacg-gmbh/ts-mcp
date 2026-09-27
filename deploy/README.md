@@ -47,6 +47,35 @@ DEV tracks the rolling `main` tag; mirror it with `source_tag: main` whenever th
 environment should pick up the branch build. Production always pins a version, so it
 is always answerable which release is running.
 
+## One-time bootstrap: the GitHub OIDC roles
+
+The workflows authenticate to AWS by OIDC, not with stored keys. The roles they
+assume are **not** created by the service stack — they cannot be, because that stack
+is deployed *by* one of them. `cfn-github-oidc.yaml` creates them, and is deployed
+once by hand with credentials that may create IAM roles:
+
+```sh
+aws cloudformation deploy \
+  --stack-name ts-mcp-github-oidc \
+  --template-file deploy/cfn-github-oidc.yaml \
+  --parameter-overrides HostedZoneId=<private zone id> \
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
+Set `CreateOidcProvider=no` if the account already has the GitHub provider — there can
+only be one per account. Then put the two output ARNs into the repository secrets.
+
+Two roles rather than one, because they are trusted differently:
+
+| Role | Trusted from | May do |
+|---|---|---|
+| `ts-mcp-gha-ecr-mirror` | the `main` branch | push to the one ECR repository |
+| `ts-mcp-gha-deploy` | the `dev` / `prd` **environments** | deploy the service stack |
+
+The deploy role is reachable only through a GitHub Environment, so environment
+protection rules — required reviewers, allowed branches — gate the credentials
+themselves, not merely the workflow that asks for them.
+
 ## Required repository configuration
 
 | Kind | Name | Example |
@@ -62,6 +91,7 @@ construction the registry the assumed role is authenticated against.
 CloudFormation has no login step to derive it from:
 `<account>.dkr.ecr.<region>.amazonaws.com/ts-mcp`.
 
-`ImageRepository` in both parameter files is a placeholder (`REPLACE_WITH_ECR_REGISTRY/ts-mcp`).
-The deploy workflow refuses to run while a placeholder is present, so filling it in is
-a deliberate step.
+`ImageRepository` is not configured anywhere: the deploy workflow derives it from the
+account the credentials belong to plus `ECR_REPOSITORY`, so it cannot drift away from
+the registry the mirror pushes to. The CloudFormation parameter has no default, so a
+dropped override fails loudly instead of silently deploying from somewhere else.

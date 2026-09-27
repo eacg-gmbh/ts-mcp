@@ -1,0 +1,237 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  GitHub Actions OIDC access for ts-mcp: one role that mirrors released images
+  into ECR, and one that deploys the ECS stack. Deploy this ONCE, by hand, with
+  credentials that may create IAM roles — the deploy role cannot create itself.
+
+# ---------------------------------------------------------------------------
+# Why this is separate from cfn-ecs-service.yaml
+#
+# The service stack is deployed BY the role this stack creates. Putting them
+# together would require the role to exist before it is created. So this is a
+# bootstrap: run it once per account, then paste the two output ARNs into the
+# repository secrets and never touch it again unless permissions change.
+#
+#   aws cloudformation deploy \
+#     --stack-name ts-mcp-github-oidc \
+#     --template-file deploy/cfn-github-oidc.yaml \
+#     --parameter-overrides HostedZoneId=Z... \
+#     --capabilities CAPABILITY_NAMED_IAM
+# ---------------------------------------------------------------------------
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Default: eacg-gmbh
+    Description: GitHub organisation that owns the private repository
+
+  GitHubRepo:
+    Type: String
+    Default: ts-mcp
+    Description: Repository name
+
+  EcrRepositoryName:
+    Type: String
+    Default: ts-mcp
+    Description: ECR repository the mirror workflow pushes into
+
+  HostedZoneId:
+    Type: String
+    Description: Private hosted zone the service stack writes its record into
+
+  CreateOidcProvider:
+    Type: String
+    Default: 'yes'
+    AllowedValues: ['yes', 'no']
+    Description: >-
+      Set to 'no' if this account already has the GitHub OIDC provider. There
+      can only be one per account, and a second one fails the stack.
+
+Conditions:
+  ShouldCreateProvider: !Equals [!Ref CreateOidcProvider, 'yes']
+
+Resources:
+
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      # AWS verifies the provider's certificate against its own trust store for
+      # this well-known URL, so the thumbprint is no longer load-bearing. It is
+      # still a required field.
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+
+  # --- Mirror role: push images, nothing else -------------------------------
+  # Trusted only from the default branch, because the mirror workflow is
+  # dispatched there. A branch a contributor can push to must never be able to
+  # assume a role that writes to the registry production pulls from.
+  MirrorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ts-mcp-gha-ecr-mirror
+      Description: Copies released ts-mcp images from Docker Hub into ECR
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/main
+      Policies:
+        - PolicyName: ecr-push
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # GetAuthorizationToken is account-wide by design — it cannot be
+              # scoped to a repository.
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecr:DescribeImages
+                Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepositoryName}
+
+  # --- Deploy role: runs the service stack ----------------------------------
+  # Trusted only through GitHub Environments, which is what deploy.yaml uses.
+  # That means environment protection rules (reviewers, branch restrictions)
+  # gate the credentials, not just the workflow.
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ts-mcp-gha-deploy
+      Description: Deploys the ts-mcp ECS stack via CloudFormation
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubOrg}/${GitHubRepo}:environment:dev
+                  - !Sub repo:${GitHubOrg}/${GitHubRepo}:environment:prd
+      Policies:
+        - PolicyName: deploy-ts-mcp-stack
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: TheStackItself
+                Effect: Allow
+                Action: cloudformation:*
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/ts-mcp-*/*
+
+              - Sid: ValidateTemplates
+                Effect: Allow
+                Action: cloudformation:ValidateTemplate
+                Resource: '*'
+
+              # The service stack creates its own named task roles, so the
+              # deploy role has to be able to create and pass them — but only
+              # ones named ts-mcp-*, never arbitrary roles.
+              - Sid: TaskRolesOnly
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:TagRole
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/ts-mcp-*
+
+              - Sid: EcsService
+                Effect: Allow
+                Action:
+                  - ecs:RegisterTaskDefinition
+                  - ecs:DeregisterTaskDefinition
+                  - ecs:DescribeTaskDefinition
+                  - ecs:CreateService
+                  - ecs:UpdateService
+                  - ecs:DeleteService
+                  - ecs:DescribeServices
+                  - ecs:DescribeClusters
+                  - ecs:TagResource
+                Resource: '*'
+
+              - Sid: LoadBalancer
+                Effect: Allow
+                Action: elasticloadbalancing:*
+                Resource: '*'
+
+              # Describe is unscopeable; security-group writes are needed
+              # because the stack owns the task's own security group.
+              - Sid: Networking
+                Effect: Allow
+                Action:
+                  - ec2:Describe*
+                  - ec2:CreateSecurityGroup
+                  - ec2:DeleteSecurityGroup
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:CreateTags
+                Resource: '*'
+
+              - Sid: PrivateDnsRecord
+                Effect: Allow
+                Action: route53:ChangeResourceRecordSets
+                Resource: !Sub arn:aws:route53:::hostedzone/${HostedZoneId}
+
+              - Sid: Route53Reads
+                Effect: Allow
+                Action:
+                  - route53:GetChange
+                  - route53:ListHostedZones
+                  - route53:GetHostedZone
+                  - route53:ListResourceRecordSets
+                Resource: '*'
+
+              - Sid: TaskLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:DescribeLogGroups
+                  - logs:PutRetentionPolicy
+                  - logs:TagResource
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/ts-mcp-*
+
+Outputs:
+  MirrorRoleArn:
+    Description: Set this as the repository secret AWS_ECR_ROLE_ARN
+    Value: !GetAtt MirrorRole.Arn
+
+  DeployRoleArn:
+    Description: Set this as the repository secret AWS_DEPLOY_ROLE_ARN
+    Value: !GetAtt DeployRole.Arn
+
+  EcrRepositoryUri:
+    Description: For reference — the workflows derive this themselves
+    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrRepositoryName}

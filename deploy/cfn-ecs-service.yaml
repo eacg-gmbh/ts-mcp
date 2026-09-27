@@ -43,8 +43,12 @@ Parameters:
 
   ImageRepository:
     Type: String
-    Default: trustsource/ts-mcp
-    Description: Docker image repository (Docker Hub)
+    Description: >-
+      Fully qualified image repository, e.g.
+      <account>.dkr.ecr.<region>.amazonaws.com/ts-mcp. Supplied by the deploy
+      workflow, which derives it from the caller's account and ECR_REPOSITORY.
+      No default on purpose: a default would silently deploy from somewhere else
+      if the override were ever dropped.
 
   ImageTag:
     Type: String
