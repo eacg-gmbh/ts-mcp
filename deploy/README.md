@@ -51,10 +51,16 @@ is always answerable which release is running.
 
 | Kind | Name | Example |
 |---|---|---|
-| Variable | `ECR_REGISTRY` | `<account>.dkr.ecr.eu-central-1.amazonaws.com` |
-| Variable | `ECR_REPOSITORY` | `ts-mcp` |
-| Variable | `AWS_REGION` | `eu-central-1` (default if unset) |
+| Variable | `ECR_REPOSITORY` | `ts-mcp` — the repository name only, as `aws ecr describe-repositories` lists it |
+| Variable | `AWS_REGION` | `eu-central-1` (used if unset) |
 | Secret | `AWS_ECR_ROLE_ARN` | OIDC role allowed to push to that repository. Falls back to `AWS_DEPLOY_ROLE_ARN` if unset — that role then needs ECR push permission. |
+
+The registry host is not configured: it comes from the ECR login step, so it is by
+construction the registry the assumed role is authenticated against.
+
+`ImageRepository` in the parameter files does need the full path, because
+CloudFormation has no login step to derive it from:
+`<account>.dkr.ecr.<region>.amazonaws.com/ts-mcp`.
 
 `ImageRepository` in both parameter files is a placeholder (`REPLACE_WITH_ECR_REGISTRY/ts-mcp`).
 The deploy workflow refuses to run while a placeholder is present, so filling it in is

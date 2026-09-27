@@ -44,8 +44,8 @@ jobs:
             echo "::error::Refusing to point :latest at a rolling branch build."
             exit 1
           fi
-          if [ -z "${{ vars.ECR_REGISTRY }}" ] || [ -z "${{ vars.ECR_REPOSITORY }}" ]; then
-            echo "::error::Repository variables ECR_REGISTRY and ECR_REPOSITORY must be set."
+          if [ -z "${{ vars.ECR_REPOSITORY }}" ]; then
+            echo "::error::Repository variable ECR_REPOSITORY must be set (the ECR repository name, e.g. ts-mcp)."
             exit 1
           fi
 
@@ -55,7 +55,12 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ECR_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
 
+      # The registry host comes from the login step rather than a configured
+      # variable: it is by construction the registry these credentials are good
+      # for. A hand-set registry in another account would push with a valid
+      # login to the wrong destination.
       - name: Log in to Amazon ECR
+        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Verify the source image exists
@@ -71,7 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           SRC="${SOURCE_IMAGE}:${{ inputs.source_tag }}"
-          DEST="${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}"
+          DEST="${{ steps.login-ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}"
           TAGS="-t ${DEST}:${{ inputs.source_tag }}"
 
           # A released version also gets the floating minor tag, mirroring what
