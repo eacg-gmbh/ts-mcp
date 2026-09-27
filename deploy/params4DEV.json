@@ -6,7 +6,7 @@
   { "ParameterKey": "AlbSecurityGroupId", "ParameterValue": "sg-0e8139c6cced20898" },
   { "ParameterKey": "HostedZoneId",       "ParameterValue": "Z1J9QNQ5OMB468" },
   { "ParameterKey": "DnsName",            "ParameterValue": "mcp.dev.trustsource.intern" },
-  { "ParameterKey": "ImageRepository",    "ParameterValue": "trustsource/ts-mcp" },
+  { "ParameterKey": "ImageRepository",    "ParameterValue": "REPLACE_WITH_ECR_REGISTRY/ts-mcp" },
   { "ParameterKey": "ImageTag",           "ParameterValue": "main" },
   { "ParameterKey": "TsAccessMode",       "ParameterValue": "readwrite" },
   { "ParameterKey": "TsApiBaseUrl",       "ParameterValue": "https://api.dev.trustsource.io/v2" },

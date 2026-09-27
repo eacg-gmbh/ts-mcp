@@ -49,7 +49,7 @@ Parameters:
   ImageTag:
     Type: String
     Default: main
-    Description: Docker image tag (main for DEV, prd for PRD)
+    Description: Docker image tag. DEV tracks the moving 'main' tag; PRD pins a released version (e.g. 0.2.1).
 
   TsAccessMode:
     Type: String
