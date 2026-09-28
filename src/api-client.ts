@@ -34,7 +34,7 @@ export class TrustSourceClient {
       contentType?: string;
     },
   ): Promise<ApiResponse> {
-    const url = new URL(path, this.baseUrl);
+    const url = new URL(this.baseUrl.replace(/\/$/, "") + path);
     if (params.query) {
       for (const [key, value] of Object.entries(params.query)) {
         if (value !== undefined && value !== "") {

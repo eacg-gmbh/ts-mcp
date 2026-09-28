@@ -2,6 +2,9 @@
 
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -12,7 +15,20 @@ import { logger, setLogLevel } from "./logger.js";
 import { validateId, validateStringParam, validateJsonBody, validateSbomDocument } from "./validation.js";
 import { DOMAIN_TOOLS, type ToolAction, type DomainTool } from "./generated-tools.js";
 
-const VERSION = "0.2.0";
+// Single source of truth is package.json, so the reported version can never
+// drift from the released one. Resolves to the package root from both
+// dist/index.js (production) and src/index.ts (tsx dev).
+function readVersion(): string {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
+    return typeof pkg.version === "string" ? pkg.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+const VERSION = readVersion();
 
 function buildInputSchema(tool: DomainTool) {
   const actionNames = tool.actions.map((a) => a.name);

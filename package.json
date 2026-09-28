@@ -1,6 +1,6 @@
 {
   "name": "@trustsource/mcp-server",
-  "version": "0.2.1",
+  "version": "0.2.4",
   "description": "MCP server for the TrustSource REST API",
   "type": "module",
   "main": "dist/index.js",
@@ -12,6 +12,7 @@
     "codegen": "tsx scripts/codegen.ts",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
+    "test": "vitest run",
     "docker:build": "docker build -t trustsource/ts-mcp .",
     "prepare": "npm run codegen && npm run build"
   },
@@ -27,13 +28,20 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@modelcontextprotocol/sdk": "^1.30.1",
     "yaml": "^2.7.1",
     "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "vitest": "^5.0.2"
+  },
+  "overrides": {
+    "fast-uri": "^3.1.7",
+    "hono": "^4.13.5",
+    "qs": "^6.16.0",
+    "@hono/node-server": "^2.1.1"
   }
 }

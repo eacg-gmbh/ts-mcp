@@ -39,12 +39,27 @@ jobs:
             type=semver,pattern={{version}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
-      - name: Build image (local only)
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Single platform on purpose: `load: true` cannot load a multi-platform
+      # manifest list into the docker daemon, and ts-scan needs one concrete
+      # image to scan. amd64 is representative -- the npm dependency set is
+      # identical across platforms, only the compiled binaries differ.
+      - name: Build image for scanning (local only, amd64)
         uses: docker/build-push-action@v7
         with:
           context: .
+          platforms: linux/amd64
           load: true
           tags: trustsource/ts-mcp:scan-candidate
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       # --- Scan with ts-scan using Syft backend, then upload to TrustSource ---
 
@@ -92,6 +107,11 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Reuses the amd64 layers built for the scan above, so the published
+          # amd64 image is the one that actually passed the gate.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

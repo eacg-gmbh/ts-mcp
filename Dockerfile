@@ -13,6 +13,11 @@ COPY src/ ./src/
 RUN npm run codegen
 RUN npm run build
 
+# Strip devDependencies (typescript, tsx, vitest and their transitive trees —
+# e.g. vite/postcss/nanoid) before they get copied into the runtime image.
+# They're only needed to compile/test, never at run time.
+RUN npm prune --omit=dev
+
 FROM node:24-alpine
 
 # Remove npm/yarn/corepack — not needed at runtime, eliminates their
