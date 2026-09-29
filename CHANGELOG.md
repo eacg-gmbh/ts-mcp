@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-09-29
+
+### Added
+
+- **Compliance Manager role** — the server now ships an assignment, not just tools. The role is an organising one: its measure of success is items closed, not findings produced
+  - Ten playbooks as MCP prompts. Legal compliance first — `new-analysis`, `resolve-components`, `notice-file`, `legal-decisions`, `follow-up` — then `compliance-status`, `triage-vulnerabilities`, `release-readiness`, `document-findings`, `stakeholder-digest`
+  - Three MCP resources: role charter (`trustsource://role/compliance-manager`), compliance policy (`trustsource://policy/foss`), mandate scope (`trustsource://scope`)
+  - Playbooks and charter adapt to the configured access mode — under `read` the agent produces the payloads it would have written instead of attempting writes
+  - The agent drafts reminders and escalations but never sends them, and never approves, rejects or mutes on its own initiative
+- **Component resolution workflow** — reconcile the licence report against the parts list, classify each component with missing data (misclassified public package vs. genuinely internal vs. third party without metadata), locate its repository, deep-scan with copyright analysis where that is the right instrument, and escalate violations only with a completed dossier
+- **Policy pack** — a structured FOSS policy (licence classification, obligations, component-resolution rules, vulnerability exposure classes with per-class SLAs, VEX vocabulary, approval dossier requirements, reminder schedule, escalation paths and contacts) that the agent decides against. Built-in default, overridable via `TS_POLICY_FILE`; the server refuses to start if the configured policy file cannot be read
+- **Project scoping** via `TS_PROJECT_SCOPE` — binds the server to named projects: out-of-scope project IDs are rejected, the project ID is injected when exactly one project is in scope, project listings are filtered, and account-wide operations (dashboard, CVE impact report, scan list, product list, user statistics) are withheld
+- `TS_ROLE_TITLE` to name the role in the agent's charter
+- `npm run policy:export` writes the default policy pack to a file for adaptation
+
+### Security
+
+- Closed a gap in project-scope enforcement found during pre-release review: an action whose project-identifying parameter is optional (for example `modules` → `list_modules`, which takes an optional `projectId` query filter) fell through scope enforcement when the caller left it unset and the scope named more than one project — no injection was possible (there is no single ID to fill in for a multi-project mandate) and no rejection occurred either, so the call went out unfiltered and returned every project in the account. Verified live before the fix: with a two-project scope configured, `list_modules` without an explicit project returned 100 modules spanning unrelated projects, including other accounts' infrastructure identifiers. Fixed by rejecting the call when the scope names more than one project and no explicit project ID is given, naming the projects the caller may choose from — matching the existing behaviour for an explicit out-of-scope value
+- `ip-address` 10.5.0 → 10.7.2 — fixes GHSA-2vr4-cq9g-pvrc (NAT64 local-use range not recognised, SSRF/trust-boundary bypass) and GHSA-rpw4-54j3-4h4q (`Address6.isLinkLocal()` matches `fe80::/64` instead of `fe80::/10`, same bypass class); both patched upstream in 10.5.1. Reached via `@modelcontextprotocol/sdk` → `express-rate-limit`. Pinned as an `overrides` security floor, same as the other transitive floors below it
+
 ## [0.2.4] - 2026-09-28
 
 ### Fixed

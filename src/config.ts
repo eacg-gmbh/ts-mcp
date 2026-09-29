@@ -24,6 +24,16 @@ export interface ServerConfig {
   transport: TransportMode;
   httpPort: number;
   logLevel: "debug" | "info" | "warn" | "error";
+  /**
+   * Project IDs the server is allowed to act on. Empty means no restriction.
+   * When set, project-addressed operations must target one of these IDs and
+   * account-wide operations are withheld.
+   */
+  projectScope: string[];
+  /** Path to a YAML policy pack overriding the built-in default. */
+  policyFile?: string;
+  /** Free-text role assignment shown to the agent in the role charter. */
+  roleTitle: string;
 }
 
 export function loadConfig(): ServerConfig {
@@ -54,6 +64,21 @@ export function loadConfig(): ServerConfig {
 
   const httpPort = parseInt(process.env.TS_HTTP_PORT ?? "3000", 10);
 
+  const projectScope = (process.env.TS_PROJECT_SCOPE ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+
+  for (const id of projectScope) {
+    if (!/^[A-Za-z0-9_-]{1,256}$/.test(id)) {
+      console.error(
+        `[FATAL] TS_PROJECT_SCOPE contains an invalid project ID: "${id}". ` +
+          "Expected a comma-separated list of TrustSource project IDs.",
+      );
+      process.exit(1);
+    }
+  }
+
   return {
     apiKey,
     apiBaseUrl:
@@ -63,5 +88,8 @@ export function loadConfig(): ServerConfig {
     httpPort,
     logLevel:
       (process.env.TS_LOG_LEVEL as ServerConfig["logLevel"]) ?? "info",
+    projectScope,
+    policyFile: process.env.TS_POLICY_FILE,
+    roleTitle: process.env.TS_ROLE_TITLE ?? "Open Source Compliance Manager",
   };
 }

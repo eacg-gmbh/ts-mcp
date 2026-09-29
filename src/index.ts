@@ -14,6 +14,8 @@ import { TrustSourceClient } from "./api-client.js";
 import { logger, setLogLevel } from "./logger.js";
 import { validateId, validateStringParam, validateJsonBody, validateSbomDocument } from "./validation.js";
 import { DOMAIN_TOOLS, type ToolAction, type DomainTool } from "./generated-tools.js";
+import { registerPrompts } from "./prompts.js";
+import { registerResources } from "./resources.js";
 
 // Single source of truth is package.json, so the reported version can never
 // drift from the released one. Resolves to the package root from both
@@ -139,6 +141,74 @@ function validateParams(
   return null;
 }
 
+/** Parameter names through which an operation addresses a single project. */
+const PROJECT_PARAM_NAMES = ["project_id", "projectId"];
+
+/**
+ * Operations that return account-wide data with no way to narrow them to a
+ * project. They are withheld while a project scope is configured — otherwise a
+ * scoped mandate would still expose the rest of the account.
+ */
+const ACCOUNT_WIDE_ACTIONS = new Set([
+  "reports.list_dashboard",
+  "reports.list_cve",
+  "scans.list_scans",
+  "products.list_products",
+  "users.list_nologin",
+  "users.list_usage",
+]);
+
+/**
+ * Enforces the configured project scope. Mutates `args` to inject the project ID
+ * when the scope names exactly one project and the caller left it out.
+ */
+function enforceProjectScope(
+  toolName: string,
+  action: ToolAction,
+  args: Record<string, unknown>,
+  scope: string[],
+): string | null {
+  if (scope.length === 0) return null;
+
+  if (ACCOUNT_WIDE_ACTIONS.has(`${toolName}.${action.name}`)) {
+    return `Action "${action.name}" returns account-wide data and is withheld: this server's mandate covers only ${scope.join(", ")}.`;
+  }
+
+  const param = action.params.find((p) => PROJECT_PARAM_NAMES.includes(p.name));
+  if (!param) return null;
+
+  const value = args[param.name];
+
+  if (value === undefined || value === "") {
+    if (scope.length === 1) {
+      args[param.name] = scope[0];
+      logger.debug("Injected scoped project ID", { action: action.name, projectId: scope[0] });
+      return null;
+    }
+    // With more than one project in scope there is no single ID to inject, and
+    // the parameter is optional at the API level — leaving it unset would send
+    // the call unfiltered and return every project in the account. Reject
+    // rather than silently widen the mandate; the caller must name one of the
+    // scoped projects explicitly.
+    return `Action "${action.name}" requires a project ID and none was given. This server's mandate covers more than one project — specify one of: ${scope.join(", ")}.`;
+  }
+
+  if (!scope.includes(String(value))) {
+    return `Project "${value}" is outside this server's mandate. Permitted: ${scope.join(", ")}.`;
+  }
+
+  return null;
+}
+
+/** Removes projects outside the mandate from a project listing response. */
+function filterProjectList(body: unknown, scope: string[]): unknown {
+  if (scope.length === 0 || !Array.isArray(body)) return body;
+  return body.filter(
+    (entry) =>
+      entry && typeof entry === "object" && scope.includes(String((entry as Record<string, unknown>)._id)),
+  );
+}
+
 function buildApiPath(
   pathTemplate: string,
   args: Record<string, unknown>,
@@ -153,6 +223,7 @@ function registerTools(
   server: McpServer,
   accessMode: AccessMode,
   client: TrustSourceClient,
+  projectScope: string[] = [],
 ): void {
   const availableTools = DOMAIN_TOOLS.filter((tool) =>
     tool.actions.some((a) => isAccessAllowed(a.minAccessMode, accessMode)),
@@ -185,6 +256,17 @@ function registerTools(
       if ("error" in resolved) {
         logger.warn(`Access denied: ${resolved.error}`);
         return { content: [{ type: "text", text: resolved.error }], isError: true };
+      }
+
+      const scopeError = enforceProjectScope(
+        tool.name,
+        resolved,
+        args as Record<string, unknown>,
+        projectScope,
+      );
+      if (scopeError) {
+        logger.warn(`Out of scope: ${scopeError}`);
+        return { content: [{ type: "text", text: scopeError }], isError: true };
       }
 
       const validationError = validateParams(resolved, args as Record<string, unknown>);
@@ -228,10 +310,15 @@ function registerTools(
           };
         }
 
+        const responseBody =
+          tool.name === "projects" && resolved.name === "list_projects"
+            ? filterProjectList(response.body, projectScope)
+            : response.body;
+
         const resultText =
-          typeof response.body === "string"
-            ? response.body
-            : JSON.stringify(response.body, null, 2);
+          typeof responseBody === "string"
+            ? responseBody
+            : JSON.stringify(responseBody, null, 2);
 
         return { content: [{ type: "text", text: resultText }] };
       } catch (err) {
@@ -258,6 +345,9 @@ async function main() {
     accessMode: config.accessMode,
     transport: config.transport,
     baseUrl: config.apiBaseUrl,
+    role: config.roleTitle,
+    projectScope:
+      config.projectScope.length > 0 ? config.projectScope : "unrestricted",
   });
 
   const client = new TrustSourceClient(config.apiBaseUrl, config.apiKey);
@@ -278,7 +368,9 @@ async function main() {
       name: "trustsource",
       version: VERSION,
     });
-    registerTools(server, config.accessMode, client);
+    registerTools(server, config.accessMode, client, config.projectScope);
+    registerResources(server, config);
+    registerPrompts(server, config);
 
     const transport = new StdioServerTransport();
     await server.connect(transport);
@@ -334,8 +426,10 @@ async function main() {
           version: VERSION,
         });
 
-        // Register tools on the session server
-        registerTools(sessionServer, config.accessMode, client);
+        // Register tools, resources and playbooks on the session server
+        registerTools(sessionServer, config.accessMode, client, config.projectScope);
+        registerResources(sessionServer, config);
+        registerPrompts(sessionServer, config);
 
         await sessionServer.connect(transport);
         await transport.handleRequest(req, res);
