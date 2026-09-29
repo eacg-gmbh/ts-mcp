@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ServerConfig } from "../../config.js";
 import { logger } from "../../logger.js";
+import { LEDGER_UPDATES_SECTION, renderLedgerSnapshot } from "./ledger.js";
 
 /**
  * Compliance playbooks exposed as MCP prompts.
@@ -56,6 +57,42 @@ function text(content: string) {
   };
 }
 
+/**
+ * Shared trigger-context arguments (E2, ts-agent-svc §5.2/§9.1): the runtime
+ * dispatches an activation into a playbook carrying the triggering event's
+ * own fields plus a ledger snapshot. Every trigger-context playbook accepts
+ * the full set uniformly — a playbook that doesn't use a given field (e.g.
+ * `follow-up` never reads `cveIds`) simply ignores it — so the runtime never
+ * has to know which subset a particular playbook cares about.
+ */
+const TRIGGER_CONTEXT_ARGS = {
+  projectId: z.string().optional().describe("TrustSource project ID"),
+  releaseId: z
+    .string()
+    .optional()
+    .describe("Release ID, when this run is release-scoped"),
+  moduleId: z.string().optional().describe("Module ID from the triggering event"),
+  analysisId: z
+    .string()
+    .optional()
+    .describe("Analysis/scan ID from the triggering event"),
+  cveIds: z
+    .string()
+    .optional()
+    .describe("Comma-separated CVE IDs from the triggering event"),
+  approvalId: z
+    .string()
+    .optional()
+    .describe("Approval ID from the triggering event"),
+  taskId: z.string().optional().describe("Task ID from the triggering event"),
+  ledger: z
+    .string()
+    .optional()
+    .describe(
+      "JSON ledger snapshot from the runtime: open objectives, todos, waiting-for, last activation summary",
+    ),
+};
+
 export function registerPlaybooks(server: McpServer, config: ServerConfig): void {
   const canWrite = config.accessMode !== "read";
 
@@ -77,23 +114,20 @@ deployment a configured channel sends them after a human has released them.`;
       description:
         "Entry point after a scan upload has been analysed: what changed, what legal work " +
         "it creates, and what to do first. Start here when a scan-uploaded event fires.",
-      argsSchema: {
-        project: z.string().optional().describe("TrustSource project ID"),
-        scan_id: z.string().optional().describe("Scan ID from the upload event"),
-      },
+      argsSchema: { ...TRIGGER_CONTEXT_ARGS },
     },
-    ({ project, scan_id }) =>
+    ({ projectId, analysisId, ledger }) =>
       text(`${preamble(config)}
 
-${projectLine(project, config)}
-
-A new scan has been analysed${scan_id ? ` (scan \`${scan_id}\`)` : ""}. Work out what
+${projectLine(projectId, config)}
+${renderLedgerSnapshot(ledger)}
+A new scan has been analysed${analysisId ? ` (scan \`${analysisId}\`)` : ""}. Work out what
 it changed and what it now requires of you. This is a working session, not a report:
 finish it with things closed or moving, not with a list.
 
 ## Establish what changed
 
-1. \`scans\` → \`get_scans\` for the scan${scan_id ? ` \`${scan_id}\`` : ""} — what was
+1. \`scans\` → \`get_scans\` for the scan${analysisId ? ` \`${analysisId}\`` : ""} — what was
    scanned, which module, when.
 2. \`reports\` → \`list_licenses\` and \`projects\` → \`list_partsList\` — the current
    legal picture. ${RECONCILE}
@@ -123,7 +157,9 @@ unresolved components are your work. Everything else is noise you have already h
 3. **What I am starting now** — and which playbook continues it.
 4. **What needs someone else** — named person or role, what you need from them, by when.
 
-${writeNote}`),
+${writeNote}
+
+${LEDGER_UPDATES_SECTION}`),
   );
 
   // =========================================================================
@@ -312,20 +348,14 @@ ${writeNote}`),
       description:
         "Prepare the open legal questions as decision-ready dossiers, open approval " +
         "requests for them, and track the ones already running.",
-      argsSchema: {
-        project: z.string().optional().describe("TrustSource project ID"),
-        approval_id: z
-          .string()
-          .optional()
-          .describe("Work on this approval request specifically"),
-      },
+      argsSchema: { ...TRIGGER_CONTEXT_ARGS },
     },
-    ({ project, approval_id }) =>
+    ({ projectId, approvalId, ledger }) =>
       text(`${preamble(config)}
 
-${projectLine(project, config)}
-
-${approval_id ? `Work on approval request \`${approval_id}\`.` : "Bring the project's open legal questions to a decision."}
+${projectLine(projectId, config)}
+${renderLedgerSnapshot(ledger)}
+${approvalId ? `Work on approval request \`${approvalId}\`.` : "Bring the project's open legal questions to a decision."}
 
 Your measure of success is decisions made, not questions raised. A question that has
 been open for three weeks is your failure, not the decision-maker's.
@@ -384,7 +414,9 @@ reminder that a thing exists.
 Never approve or reject anything yourself. Your authority ends at a complete,
 well-argued recommendation.
 
-${writeNote}`),
+${writeNote}
+
+${LEDGER_UPDATES_SECTION}`),
   );
 
   // =========================================================================
@@ -398,18 +430,18 @@ ${writeNote}`),
         "Work out who owes what and by when, and draft the reminders — calibrated to how " +
         "overdue each item is and to who has to act.",
       argsSchema: {
-        project: z.string().optional().describe("TrustSource project ID"),
+        ...TRIGGER_CONTEXT_ARGS,
         as_of: z
           .string()
           .optional()
           .describe("Date to measure against (YYYY-MM-DD), defaults to today"),
       },
     },
-    ({ project, as_of }) =>
+    ({ projectId, ledger, as_of }) =>
       text(`${preamble(config)}
 
-${projectLine(project, config)}
-
+${projectLine(projectId, config)}
+${renderLedgerSnapshot(ledger)}
 Work out what is outstanding${as_of ? ` as of ${as_of}` : ""}, who owes it, and draft the
 follow-ups.
 
@@ -451,7 +483,9 @@ is not answerable; "Can we replace X with Y, or do you want to seek an exemption
 
 ${draftingRule}
 
-${writeNote}`),
+${writeNote}
+
+${LEDGER_UPDATES_SECTION}`),
   );
 
   // =========================================================================
@@ -465,18 +499,18 @@ ${writeNote}`),
         "Full assessment of a project — legal position first, then security — condensed " +
         "into blockers, actions with deadlines, and what could not be assessed.",
       argsSchema: {
-        project: z.string().optional().describe("TrustSource project ID"),
+        ...TRIGGER_CONTEXT_ARGS,
         since: z
           .string()
           .optional()
           .describe("Only highlight what changed since this date (YYYY-MM-DD)"),
       },
     },
-    ({ project, since }) =>
+    ({ projectId, ledger, since }) =>
       text(`${preamble(config)}
 
-${projectLine(project, config)}
-
+${projectLine(projectId, config)}
+${renderLedgerSnapshot(ledger)}
 Produce the compliance status review for this project. Lead with the legal position —
 that is where clearance is won or lost — and treat security as the second section.
 
@@ -515,7 +549,9 @@ ${since ? `7. Changes since ${since} get their own section at the top: what is n
 5. **Action required** — with owner-role and absolute due date.
 6. **Not assessable** — what you could not determine, and what evidence would settle it.
 
-Use absolute dates, never "in two weeks". ${writeNote}`),
+Use absolute dates, never "in two weeks". ${writeNote}
+
+${LEDGER_UPDATES_SECTION}`),
   );
 
   // =========================================================================
@@ -529,16 +565,25 @@ Use absolute dates, never "in two weeks". ${writeNote}`),
         "Triage every CVE by exposure and reachability, assign policy SLAs, and draft the " +
         "VEX statement for findings that do not apply.",
       argsSchema: {
-        project: z.string().optional().describe("TrustSource project ID"),
+        ...TRIGGER_CONTEXT_ARGS,
         cve: z.string().optional().describe("Triage only this CVE (e.g. CVE-2026-26996)"),
       },
     },
-    ({ project, cve }) =>
+    ({ projectId, cveIds, ledger, cve }) =>
       text(`${preamble(config)}
 
-${projectLine(project, config)}
-
-${cve ? `Triage **${cve}** only.` : "Triage every open vulnerability in this project."}
+${projectLine(projectId, config)}
+${renderLedgerSnapshot(ledger)}
+${
+  cve
+    ? `Triage **${cve}** only.`
+    : cveIds
+      ? `Triage the CVEs from the triggering event: ${cveIds
+          .split(",")
+          .map((id) => `**${id.trim()}**`)
+          .join(", ")}.`
+      : "Triage every open vulnerability in this project."
+}
 
 ## Evidence
 
@@ -586,7 +631,9 @@ drafted VEX statements.
 Close with a note on build integrity: vulnerabilities downgraded as build-time remain
 relevant to supply-chain integrity even though they do not block the release.
 
-${writeNote}`),
+${writeNote}
+
+${LEDGER_UPDATES_SECTION}`),
   );
 
   // =========================================================================
@@ -599,17 +646,14 @@ ${writeNote}`),
       description:
         "Go / no-go decision proposal: what blocks the release, what ships with accepted " +
         "residual risk, and what must be documented first.",
-      argsSchema: {
-        project: z.string().optional().describe("TrustSource project ID"),
-        release: z.string().optional().describe("Release name or version being assessed"),
-      },
+      argsSchema: { ...TRIGGER_CONTEXT_ARGS },
     },
-    ({ project, release }) =>
+    ({ projectId, releaseId, ledger }) =>
       text(`${preamble(config)}
 
-${projectLine(project, config)}
-
-Assess release readiness${release ? ` for release **${release}**` : ""} and produce a
+${projectLine(projectId, config)}
+${renderLedgerSnapshot(ledger)}
+Assess release readiness${releaseId ? ` for release **${releaseId}**` : ""} and produce a
 go / no-go recommendation. You are preparing a decision, not making it — your job is to
 make a human's signature well-informed and quick.
 
@@ -651,7 +695,9 @@ residual-risk statement, not silence.
 5. **Sign-off record** — the exact statement a human can countersign, naming the policy
    version, the date, and what was assessed.
 
-${writeNote}`),
+${writeNote}
+
+${LEDGER_UPDATES_SECTION}`),
   );
 
   // =========================================================================
@@ -777,7 +823,72 @@ End with one line naming the next scheduled review and who owns the open items.
 ${draftingRule}`),
   );
 
-  logger.info(`Registered 10 playbooks for role "${config.role}"`, {
+  // =========================================================================
+  // 11 — Trigger playbook: a new release cycle opens
+  // =========================================================================
+  server.registerPrompt(
+    "new-release",
+    {
+      title: "New release cycle - plan and reconcile",
+      description:
+        "Entry point when a release cycle opens: reconcile against the previous release's " +
+        "state, open the objective set for this cycle, and hand back a ledger update. Start " +
+        "here when a release-opened event fires.",
+      argsSchema: { ...TRIGGER_CONTEXT_ARGS },
+    },
+    ({ projectId, releaseId, ledger }) =>
+      text(`${preamble(config)}
+
+${projectLine(projectId, config)}
+${renderLedgerSnapshot(ledger)}
+A new release cycle is opening${releaseId ? ` (release \`${releaseId}\`)` : ""}. Your job is
+to plan the cycle, not to assess it yet - that is what \`release-readiness\` is for once
+the work is done. Finish this session with a concrete objective set, not a summary of
+the previous release.
+
+## Reconcile against the previous release
+
+1. Use the ledger snapshot above to find the previous release's objectives and their
+   final status. An objective marked \`done\` or \`waived\` does not carry forward; one
+   still \`open\` does, unless this cycle's scope has made it obsolete - say so if it has.
+2. \`releases\` → \`list_notice\` and \`list_sbom\` for the previous published release -
+   confirm what actually shipped last time matches what the ledger says was decided. A
+   mismatch between "decided" and "shipped" is itself a finding, not a bookkeeping detail.
+3. \`reports\` → \`list_licenses\`, \`list_vulnerabilities\` and \`projects\` → \`list_partsList\`
+   - the current legal and security picture, compared against what the previous
+   release's objectives assumed. ${RECONCILE}
+4. \`risks\` → \`list_risks\` and \`list_tasks\` - open treatment tasks with a due date
+   inside this cycle become this cycle's objectives; nothing here should be silently
+   dropped just because the release moved on.
+
+## Plan the cycle
+
+1. **Carried-over objectives** - still open, still in scope: restate them, don't
+   silently re-open a new copy.
+2. **New objectives** - from the reconciliation above: newly unresolved components,
+   newly introduced licences, newly due obligations, vulnerabilities whose SLA falls
+   inside this cycle.
+3. **Dropped objectives** - carried-over items that are now genuinely obsolete, with
+   the reason. Silence is not the same as a decision.
+4. **Key dates** - the release date if known, and any objective's own deadline that
+   falls before it. Flag anything that cannot realistically close in time now, while
+   there is still room to act, not at the readiness gate.
+
+## Deliverable
+
+1. **Reconciliation** - what carried over, what's new, what's dropped, in three
+   short lists.
+2. **This cycle's objective set** - every objective from above, each with an owner
+   and a target date.
+3. **Risks to the cycle** - anything already visible that could block
+   \`release-readiness\` later, named now so it isn't a surprise then.
+
+${writeNote}
+
+${LEDGER_UPDATES_SECTION}`),
+  );
+
+  logger.info(`Registered 11 playbooks for role "${config.role}"`, {
     accessMode: config.accessMode,
     writeEnabled: canWrite,
   });

@@ -142,6 +142,7 @@ In Claude Desktop and Claude Code these appear as slash commands.
 | `compliance-status` | Full assessment, legal position first: blockers, actions with deadlines, and what could not be assessed |
 | `triage-vulnerabilities` | Every CVE classified by exposure and reachability, with policy SLA, remedy and a drafted VEX statement |
 | `release-readiness` | GO / GO WITH CONDITIONS / NO-GO, with residual risk and a sign-off record for a human to countersign |
+| `new-release` | Entry point when a release cycle opens: reconciles against the previous release's state and opens this cycle's objective set |
 | `document-findings` | Findings turned into TrustSource risks with treatment tasks, so the next run starts from decisions |
 | `stakeholder-digest` | A 200-word digest calibrated to engineering, management, customers or auditors |
 
