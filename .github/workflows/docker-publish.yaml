@@ -20,6 +20,20 @@ permissions:
 jobs:
   build-and-scan:
     name: Build, Scan & Publish
+    # Publishing to Docker Hub is the PUBLIC repository's job (TrustSource/ts-mcp).
+    # This fork must never push to the trustsource/ts-mcp namespace: it carries
+    # internal AWS account details, VPC/subnet/security-group IDs and private DNS
+    # names, and a push from here would overwrite the public :latest and :0.2.x
+    # tags with an internally-modified image.
+    #
+    # Internal distribution goes through the ECR mirror instead (see PR #1).
+    #
+    # Guarding on the repository rather than deleting the file keeps this workflow
+    # structurally identical to upstream, so syncing it from the public repo does
+    # not produce delete/modify conflicts. In this fork the job is simply skipped,
+    # which also ends the recurring "Username and password required" failures --
+    # the Docker Hub secrets deliberately do not exist here.
+    if: github.repository == 'TrustSource/ts-mcp'
     runs-on: ubuntu-latest
 
     steps:
