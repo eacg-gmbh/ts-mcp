@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-09-29
+
+### Added
+
+- **`new-release` playbook** (ts-agent-svc ADR-004/§5.2, ts-mcp ADR-013) — entry point when a release cycle opens: reconciles this cycle's objectives against the previous release's state (via the `ledger` argument and `releases`/`risks` evidence), then proposes the cycle's objective set. The counterpart to `release-readiness`, which gates the cycle's exit rather than opening its entry
+- **Trigger-context arguments** — every trigger-eligible playbook (`new-analysis`, `legal-decisions`, `follow-up`, `compliance-status`, `triage-vulnerabilities`, `release-readiness`, `new-release`) now accepts a shared argument set matching `ts-agent-svc`'s own webhook payload field names exactly: `projectId`, `releaseId`, `moduleId`, `analysisId`, `cveIds`, `approvalId`, `taskId`. Previously each playbook declared its own ad-hoc name (`project`, `scan_id`, `approval_id`, `release`), so the calling runtime had to remap its payload per playbook instead of passing the trigger straight through. The four playbooks invoked mid-workflow rather than by a runtime trigger (`resolve-components`, `notice-file`, `document-findings`, `stakeholder-digest`) are unchanged — they still take a plain `project` argument
+- **`ledger` argument and snapshot rendering** (`src/roles/compliance-manager/ledger.ts`) — a JSON-string argument carrying the calling runtime's own ledger state (open objectives, open todos, waiting-for items, a one-line last-activation summary). `renderLedgerSnapshot()` turns it into a markdown section every trigger-context playbook interpolates near the top of its text; a missing or empty argument renders nothing, and malformed JSON is reported in the output rather than thrown. ts-mcp defines its own `LedgerSnapshot` shape for this rather than importing `ts-agent-svc`'s schemas, so the two repos stay independently versioned
+- **`LEDGER_UPDATES_SECTION`** — every trigger-context playbook now closes with a fixed instruction to report objective/todo changes in a structured shape, so the runtime's `ledger_update` tool gets a clear input instead of having to parse one out of free-form prose
+
 ## [0.4.0] - 2026-09-29
 
 ### Added

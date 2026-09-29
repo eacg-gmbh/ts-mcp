@@ -52,12 +52,14 @@ Each domain tool bundles related API operations as "actions" with a shared input
 Everything that varies by `TS_ROLE` (ADR-012): a charter (`charter.ts`) and, where
 built, playbooks exposed as MCP prompts (`prompts.ts`), wired together in the pack's
 `index.ts` against the shared `RolePack` interface (`src/roles/types.ts`).
-`compliance-manager` ships the full pack — ten MCP prompts encoding the recurring
+`compliance-manager` ships the full pack — eleven MCP prompts encoding the recurring
 procedures of a compliance manager, each with a fixed evidence path, explicit
 decision rules and a defined deliverable, playbook text adapting to the configured
 access mode and project scope at registration time. `security-manager` and
 `component-manager` currently ship a charter only. `src/roles/shared-authority.ts`
 holds the read/readwrite/full authority language every charter shares.
+`src/roles/compliance-manager/ledger.ts` holds the `ledger` argument's rendering
+logic, shared across every trigger-context playbook (ADR-013).
 
 ### Playbooks and Role Charter dispatch (`src/prompts.ts`, `src/resources.ts`)
 
@@ -365,6 +367,54 @@ read/readwrite/full authority language moved to a small shared module
 Existing behaviour with no `TS_ROLE` set is unchanged — verified byte-for-byte
 against the pre-refactor charter output.
 
+### ADR-013: Trigger-context arguments and ledger snapshot (2026-09-29, v0.5.0)
+
+**Context:** `ts-agent-svc` (ADR-004/its own ADR set) dispatches a playbook whenever
+a webhook fires, carrying the triggering event's own fields — project, release,
+module, analysis, CVE list, approval, task — under its `TsWebhookPayloadSchema`
+naming. Before this change every playbook that could use that context declared its
+own ad-hoc argument (`project`, `scan_id`, `approval_id`, `release`, …), so the
+runtime had to remap its payload's field names per playbook rather than passing the
+trigger straight through. Separately, the runtime keeps a ledger of this agent's
+standing work (open objectives, todos, what it's waiting on) that a playbook has no
+way to see — every run started cold, re-deriving state the runtime already tracked.
+
+**Decision:** every trigger-eligible playbook accepts one shared argument object,
+`TRIGGER_CONTEXT_ARGS` (`src/roles/compliance-manager/prompts.ts`): `projectId`,
+`releaseId`, `moduleId`, `analysisId`, `cveIds`, `approvalId`, `taskId` — named to
+match `ts-agent-svc`'s own webhook payload fields exactly — plus `ledger`, a JSON
+string the calling runtime renders from its own ledger state. All MCP prompt
+arguments are plain strings on the wire, so `ledger` is JSON-in-a-string rather than
+a structured argument; ts-mcp defines its own expected shape for it
+(`LedgerSnapshot` in `src/roles/compliance-manager/ledger.ts`) rather than importing
+`ts-agent-svc`'s schemas — the two repos stay independently versioned, and a caller
+that isn't `ts-agent-svc` can still supply an ledger. `renderLedgerSnapshot()` turns
+that argument into a markdown section every playbook interpolates near the top of
+its text (open objectives, open todos, waiting-for items, a one-line "since your
+last activation" summary); a missing or empty argument renders nothing, and
+malformed JSON is reported in the output rather than thrown. Every trigger-context
+playbook now closes with `LEDGER_UPDATES_SECTION`, a fixed instruction to report
+objective/todo changes in a structured shape the runtime's `ledger_update` tool can
+consume directly, instead of parsing them out of free-form prose. A playbook that
+doesn't use a given field (`follow-up` never reads `cveIds`) simply ignores it — the
+runtime always passes the same shape and never has to know which subset a
+particular playbook cares about.
+
+**Consequences:** `ts-agent-svc` can dispatch its own trigger payload into any
+playbook without a translation layer, and a playbook gains "what have I already
+started" for free instead of re-discovering it from TrustSource state on every run.
+The `ledger` contract is ts-mcp's own — a breaking change to it is a ts-mcp semver
+event, not something that silently drifts with `ts-agent-svc`'s internal ledger
+schema. The four playbooks with no natural trigger event (`resolve-components`,
+`notice-file`, `document-findings`, `stakeholder-digest`) were deliberately left on
+their pre-existing `project` argument — they're invoked mid-workflow by another
+playbook or by a human, not by a runtime dispatch, so there's no trigger payload to
+carry. This ADR also introduces the **`new-release`** playbook: the entry point when
+a release cycle opens, reconciling against the previous release's state (via the
+`ledger` argument and `releases`/`risks` evidence) and proposing this cycle's
+objective set — the counterpart to `release-readiness`, which gates the cycle's exit
+rather than opening its entry.
+
 ## Event-Driven Operation
 
 The pilot deployment is triggered by TrustSource's **scan-uploaded** webhook. A scan
@@ -376,10 +426,11 @@ ts-scan upload / CI pipeline
         │
         ▼
 TrustSource analysis completes
-        │  webhook: scan uploaded
+        │  webhook: scan uploaded (ts-agent-svc's trigger payload → TRIGGER_CONTEXT_ARGS)
         ▼
   Agent runtime (Agent SDK)
-        │  invokes the `new-analysis` playbook
+        │  invokes the `new-analysis` playbook, passing the event's own fields plus
+        │  a `ledger` snapshot of this agent's open objectives/todos (ADR-013)
         ▼
   MCP Server (scoped to the project)
         │
@@ -390,11 +441,20 @@ TrustSource analysis completes
                 │
                 ▼
         Risk register (the agent's memory) + drafted messages for a human to release
+                │
+                ▼
+        Ledger update proposal (LEDGER_UPDATES_SECTION) → runtime's `ledger_update` tool
 ```
 
 The risk register doubles as the agent's state store: each run reads what was already
 decided before deciding anything. No separate agent database is required, and the
-state stays where auditors and humans already look.
+state stays where auditors and humans already look. The ledger snapshot (ADR-013)
+complements this for state that isn't TrustSource's to hold — cross-run todos and
+waiting-for items that live in the runtime, not in a TrustSource record.
+
+A release cycle follows the same pattern at its two ends: a **release-opened** event
+invokes `new-release` to plan the cycle, and the cycle's exit invokes
+`release-readiness` to gate it.
 
 Scheduled runs (a weekly `follow-up`, a `release-readiness` gate in CI) use the same
 playbooks — the runtime invokes MCP prompts rather than reimplementing the procedures.
