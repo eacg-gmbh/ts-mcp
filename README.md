@@ -18,13 +18,14 @@ That's it. The server speaks MCP over stdio and is ready to be used by any MCP c
 |---|---|---|---|
 | `TS_API_KEY` | **Yes** | — | TrustSource API key ([how to obtain one](#api-key)) |
 | `TS_ACCESS_MODE` | No | `read` | Access tier: `read`, `readwrite`, or `full` |
+| `TS_ROLE` | No | `compliance-manager` | Role pack: `compliance-manager`, `security-manager`, or `component-manager`. `security-manager` and `component-manager` currently ship a charter only (no dedicated playbooks yet) |
 | `TS_TRANSPORT` | No | `stdio` | Transport mode: `stdio` or `http` |
 | `TS_HTTP_PORT` | No | `3000` | HTTP listen port (only used with `http` transport) |
 | `TS_API_BASE_URL` | No | `https://api.trustsource.io/v2` | TrustSource API base URL |
 | `TS_LOG_LEVEL` | No | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `TS_PROJECT_SCOPE` | No | — | Comma-separated project IDs the server may act on. Unset means the whole account. |
 | `TS_POLICY_FILE` | No | — | Path to your compliance policy pack (YAML). Falls back to the built-in default. |
-| `TS_ROLE_TITLE` | No | `Open Source Compliance Manager` | Role name shown to the agent in its charter |
+| `TS_ROLE_TITLE` | No | the active role's own title (e.g. `Open Source Compliance Manager`) | Role name shown to the agent in its charter |
 
 ## Transport Modes
 
@@ -169,7 +170,7 @@ The workflow behind `resolve-components` is deliberately not "scan everything":
 
 | Resource | Content |
 |---|---|
-| `trustsource://role/compliance-manager` | Mandate, authority, working principles and hard limits — what the agent must never decide alone |
+| `trustsource://role/<TS_ROLE>` (e.g. `.../compliance-manager`) | Mandate, authority, working principles and hard limits — what the agent must never decide alone |
 | `trustsource://policy/foss` | The governing policy: licence classification, obligations, component-resolution rules, vulnerability exposure classes and SLAs, VEX vocabulary, approval dossier requirements, reminder schedule, escalation paths and contacts |
 | `trustsource://scope` | Which projects the server may act on, and with what authority |
 

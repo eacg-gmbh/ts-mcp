@@ -1,3 +1,5 @@
+import { ROLE_PACKS, ROLES, type Role } from "./roles/index.js";
+
 export const ACCESS_MODES = ["read", "readwrite", "full"] as const;
 export type AccessMode = (typeof ACCESS_MODES)[number];
 
@@ -32,7 +34,12 @@ export interface ServerConfig {
   projectScope: string[];
   /** Path to a YAML policy pack overriding the built-in default. */
   policyFile?: string;
-  /** Free-text role assignment shown to the agent in the role charter. */
+  /** Which role pack governs the charter and playbooks (ts-agent-svc ADR-004:
+   * templates map 1:1 to ts-mcp roles). */
+  role: Role;
+  /** Free-text role assignment shown to the agent in the role charter.
+   * Defaults to the active role pack's own title; `TS_ROLE_TITLE` overrides
+   * it for either role. */
   roleTitle: string;
 }
 
@@ -53,6 +60,15 @@ export function loadConfig(): ServerConfig {
     );
     process.exit(1);
   }
+
+  const rawRole = process.env.TS_ROLE ?? "compliance-manager";
+  if (!ROLES.includes(rawRole as Role)) {
+    console.error(
+      `[FATAL] TS_ROLE must be one of: ${ROLES.join(", ")}. Got: "${rawRole}"`,
+    );
+    process.exit(1);
+  }
+  const role = rawRole as Role;
 
   const rawTransport = process.env.TS_TRANSPORT ?? "stdio";
   if (!TRANSPORTS.includes(rawTransport as TransportMode)) {
@@ -90,6 +106,7 @@ export function loadConfig(): ServerConfig {
       (process.env.TS_LOG_LEVEL as ServerConfig["logLevel"]) ?? "info",
     projectScope,
     policyFile: process.env.TS_POLICY_FILE,
-    roleTitle: process.env.TS_ROLE_TITLE ?? "Open Source Compliance Manager",
+    role,
+    roleTitle: process.env.TS_ROLE_TITLE ?? ROLE_PACKS[role].defaultTitle,
   };
 }

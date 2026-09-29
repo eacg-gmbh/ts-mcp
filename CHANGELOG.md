@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-09-29
+
+### Added
+
+- **`TS_ROLE` role selection** (ts-agent-svc ADR-004: templates map 1:1 to ts-mcp roles) — `compliance-manager` (default, unchanged behaviour), `security-manager`, `component-manager`; unknown values fail fast at startup like `TS_ACCESS_MODE`/`TS_TRANSPORT` already do
+- Role pack structure: `src/roles/<role>/{charter.ts, prompts.ts, index.ts}`, dispatched by `src/resources.ts`/`src/prompts.ts` via `src/roles/index.ts`'s `ROLE_PACKS` registry. `src/roles/shared-authority.ts` holds the read/readwrite/full authority language every role's charter shares, so it doesn't drift across role packs
+  - `compliance-manager` — the existing full pack (charter + 10 playbooks), moved verbatim; its `trustsource://role/compliance-manager` resource URI and charter content are unchanged
+  - `security-manager` / `component-manager` — stub packs (charter only, no `registerPlaybooks`) reflecting each role's mission from ts-agent-svc's `ARCHITECTURE.md` (vulnerability posture / component hygiene respectively); their real playbooks are E4 and E5
+- `TS_ROLE_TITLE`'s default is now derived from the active role pack (`ROLE_PACKS[role].defaultTitle`) instead of being hardcoded to the compliance-manager title; explicit `TS_ROLE_TITLE` still overrides it for any role
+- `trustsource://role/<role>` resource URI is now parameterised by `config.role` (was hardcoded to `.../compliance-manager`) — the compliance-manager URI is unchanged since it's still the default role
+- 10 new tests: `config.test.ts` (TS_ROLE defaulting, per-role title, TS_ROLE_TITLE override, fail-fast on an unknown role) and `roles/index.test.ts` (registry shape, which packs have playbooks, every charter builds without throwing)
+
 ## [0.3.0] - 2026-09-29
 
 ### Added
