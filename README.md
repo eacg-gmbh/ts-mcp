@@ -203,6 +203,11 @@ between handing an agent your whole account and giving it one assignment:
 - `projects` → `list_projects` returns only the scoped projects.
 - Account-wide operations with no way to narrow them (dashboard report, CVE impact
   report, scan list, product list, user statistics) are withheld entirely.
+- `releases` (release/CSAF-key-addressed actions have no project parameter of their
+  own) instead require a `projectId` argument, checked and auto-filled the same way —
+  though, unlike every other case above, the API gives no way to verify a release
+  actually belongs to the asserted project (see ARCHITECTURE.md's "API Needs" and
+  ADR-012); this is the best available check until that's fixed upstream.
 
 Scope is enforced in the server, not requested of the agent. It complements — and
 does not replace — a TrustSource API key with appropriately narrow scopes.

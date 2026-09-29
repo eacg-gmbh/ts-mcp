@@ -16,6 +16,7 @@ import { validateId, validateStringParam, validateJsonBody, validateSbomDocument
 import { DOMAIN_TOOLS, type ToolAction, type DomainTool } from "./generated-tools.js";
 import { registerPrompts } from "./prompts.js";
 import { registerResources } from "./resources.js";
+import { enforceProjectScope, filterProjectList, isReleaseKeyAction } from "./scope.js";
 
 // Single source of truth is package.json, so the reported version can never
 // drift from the released one. Resolves to the package root from both
@@ -41,6 +42,10 @@ function buildInputSchema(tool: DomainTool) {
       allParamNames.add(param.name);
     }
     if (action.hasBody) allParamNames.add("body");
+    // See isReleaseKeyAction's doc comment: a release_key/csaf_key-addressed
+    // action gains a synthetic projectId argument, never sent to the API,
+    // purely so a scoped server has something to check.
+    if (isReleaseKeyAction(action)) allParamNames.add("projectId");
   }
 
   const shape: Record<string, z.ZodTypeAny> = {
@@ -58,6 +63,12 @@ function buildInputSchema(tool: DomainTool) {
         if (action.hasBody) {
           descriptions.push(`[${action.name}] Request body (JSON object)`);
         }
+        continue;
+      }
+      if (paramName === "projectId" && isReleaseKeyAction(action)) {
+        descriptions.push(
+          `[${action.name}] TrustSource project this release/CSAF key belongs to — required when this server has a project mandate configured, so it can check the key is within scope. Not sent to the TrustSource API, which has no way to verify this itself.`,
+        );
         continue;
       }
       const param = action.params.find((p) => p.name === paramName);
@@ -139,74 +150,6 @@ function validateParams(
   }
 
   return null;
-}
-
-/** Parameter names through which an operation addresses a single project. */
-const PROJECT_PARAM_NAMES = ["project_id", "projectId"];
-
-/**
- * Operations that return account-wide data with no way to narrow them to a
- * project. They are withheld while a project scope is configured — otherwise a
- * scoped mandate would still expose the rest of the account.
- */
-const ACCOUNT_WIDE_ACTIONS = new Set([
-  "reports.list_dashboard",
-  "reports.list_cve",
-  "scans.list_scans",
-  "products.list_products",
-  "users.list_nologin",
-  "users.list_usage",
-]);
-
-/**
- * Enforces the configured project scope. Mutates `args` to inject the project ID
- * when the scope names exactly one project and the caller left it out.
- */
-function enforceProjectScope(
-  toolName: string,
-  action: ToolAction,
-  args: Record<string, unknown>,
-  scope: string[],
-): string | null {
-  if (scope.length === 0) return null;
-
-  if (ACCOUNT_WIDE_ACTIONS.has(`${toolName}.${action.name}`)) {
-    return `Action "${action.name}" returns account-wide data and is withheld: this server's mandate covers only ${scope.join(", ")}.`;
-  }
-
-  const param = action.params.find((p) => PROJECT_PARAM_NAMES.includes(p.name));
-  if (!param) return null;
-
-  const value = args[param.name];
-
-  if (value === undefined || value === "") {
-    if (scope.length === 1) {
-      args[param.name] = scope[0];
-      logger.debug("Injected scoped project ID", { action: action.name, projectId: scope[0] });
-      return null;
-    }
-    // With more than one project in scope there is no single ID to inject, and
-    // the parameter is optional at the API level — leaving it unset would send
-    // the call unfiltered and return every project in the account. Reject
-    // rather than silently widen the mandate; the caller must name one of the
-    // scoped projects explicitly.
-    return `Action "${action.name}" requires a project ID and none was given. This server's mandate covers more than one project — specify one of: ${scope.join(", ")}.`;
-  }
-
-  if (!scope.includes(String(value))) {
-    return `Project "${value}" is outside this server's mandate. Permitted: ${scope.join(", ")}.`;
-  }
-
-  return null;
-}
-
-/** Removes projects outside the mandate from a project listing response. */
-function filterProjectList(body: unknown, scope: string[]): unknown {
-  if (scope.length === 0 || !Array.isArray(body)) return body;
-  return body.filter(
-    (entry) =>
-      entry && typeof entry === "object" && scope.includes(String((entry as Record<string, unknown>)._id)),
-  );
 }
 
 function buildApiPath(
