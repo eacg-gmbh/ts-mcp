@@ -1,6 +1,6 @@
 {
   "name": "@trustsource/mcp-server",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "description": "MCP server for the TrustSource REST API",
   "type": "module",
   "main": "dist/index.js",
@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc",
     "codegen": "tsx scripts/codegen.ts",
+    "policy:export": "tsx scripts/export-policy.ts",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "vitest run",
@@ -42,6 +43,7 @@
     "fast-uri": "^3.1.7",
     "hono": "^4.13.5",
     "qs": "^6.16.0",
-    "@hono/node-server": "^2.1.1"
+    "@hono/node-server": "^2.1.1",
+    "ip-address": "^10.5.1"
   }
 }
