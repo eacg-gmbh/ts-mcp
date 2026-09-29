@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-09-30
+
+### Added
+
+- **`TS_PROJECT_SCOPE` enforcement extended to the `releases` domain** (ADR-012) — `list_sbom`, `list_notice`, `list_csaf`, `list_csaf_changes`, `list_documents`, `get_documents` are addressed by an opaque `release_key`/`csaf_key` with no project parameter of their own, so a scoped server previously passed every one of them through completely unscoped. They now require a `projectId` argument (auto-filled for a single-project mandate), checked against the mandate the same way a real project parameter is — a caller assertion, not independent verification, since the TrustSource API has no way to confirm which project a release/CSAF key belongs to (filed as `eacg-gmbh/ts-api#1`)
+- `src/scope.ts` — `enforceProjectScope`/`isReleaseKeyAction`/`filterProjectList` extracted from `index.ts` so this logic (existing and new) is directly unit-tested; 18 new tests
+- **"API Needs" section** in `ARCHITECTURE.md` — a small, specific table of confirmed ts-api gaps with their filed issue numbers, instead of scattering "this API doesn't support X" notes across the codebase
+
+### Changed
+
+- E3 inventory confirmed the `releases` domain already maps every release-scoped endpoint the API exposes (`sbom`, `notice`, `csaf`, `csaf-changes`, plus the CSAF-feed `documents`/`documents/{id}` pair) with clear action names — no mapping changes were needed, only the scope-enforcement gap above
+
 ## [0.3.0] - 2026-09-29
 
 ### Added
