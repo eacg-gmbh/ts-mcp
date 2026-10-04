@@ -49,14 +49,45 @@ jobs:
           aws cloudformation validate-template \
             --template-body file://deploy/cfn-ecs-service.yaml
 
+      # ImageRepository is derived, not configured. It is exactly
+      # <account>.dkr.ecr.<region>.amazonaws.com/<ECR_REPOSITORY>, and the
+      # account is whichever one these credentials belong to — so it cannot
+      # drift away from the registry the mirror workflow pushes to. Keeping it
+      # in the parameter file would be the same value maintained by hand in a
+      # third place.
+      - name: Resolve image repository
+        id: image
+        run: |
+          set -euo pipefail
+          if [ -z "${{ vars.ECR_REPOSITORY }}" ]; then
+            echo "::error::Repository variable ECR_REPOSITORY must be set."
+            exit 1
+          fi
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          REGION="${{ vars.AWS_REGION || 'eu-central-1' }}"
+          REPO="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${{ vars.ECR_REPOSITORY }}"
+          echo "repository=$REPO" >> "$GITHUB_OUTPUT"
+          echo "Deploying from $REPO"
+
       - name: Deploy CloudFormation stack
         run: |
+          set -euo pipefail
           STACK_NAME="ts-mcp-${{ inputs.environment }}"
+
+          # `aws cloudformation deploy` takes either a file:// list or inline
+          # Key=Value pairs, not both, so merge them into one argument list.
+          # An array keeps values with spaces intact.
+          OVERRIDES=()
+          while IFS= read -r kv; do
+            OVERRIDES+=("$kv")
+          done < <(jq -r '.[] | "\(.ParameterKey)=\(.ParameterValue)"' \
+                   "${{ steps.params.outputs.file }}")
+          OVERRIDES+=("ImageRepository=${{ steps.image.outputs.repository }}")
 
           aws cloudformation deploy \
             --stack-name "$STACK_NAME" \
             --template-file deploy/cfn-ecs-service.yaml \
-            --parameter-overrides "file://${{ steps.params.outputs.file }}" \
+            --parameter-overrides "${OVERRIDES[@]}" \
             --capabilities CAPABILITY_NAMED_IAM \
             --no-fail-on-empty-changeset
 
