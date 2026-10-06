@@ -73,7 +73,7 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: ts-mcp-gha-ecr-mirror
-      Description: Copies released ts-mcp images from Docker Hub into ECR
+      Description: Pushes ts-mcp images to ECR (mirror-to-ecr from main, ecr-publish from main and v* tags)
       MaxSessionDuration: 3600
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -85,7 +85,16 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/main
+              # main (rolling DEV build, mirror-to-ecr) and v* release tags
+              # (ecr-publish). Tags are trusted on purpose: a release is a tag
+              # push. Protect the `v*` pattern in the repository's tag rules so
+              # that only maintainers can create them — otherwise anyone who can
+              # push a tag can assume a role that writes to ECR. The workflow
+              # also gates on ts-scan BEFORE it uses these credentials.
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/main
+                  - !Sub repo:${GitHubOrg}/${GitHubRepo}:ref:refs/tags/v*
       Policies:
         - PolicyName: ecr-push
           PolicyDocument:

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`ecr-publish.yaml`** (ts-agent-svc E8) — builds this fork's own image, runs the ts-scan gate (`--exit-on-vulns --Werror`, own TrustSource project `ts-mcp-eacg-fork`) **before any AWS credential is used**, then pushes a multi-arch image to ECR as `<semver>` (on `v*` tags), `main` and `<sha>`. The digest is printed in the run summary and written to the GitHub release notes, because ts-agent-svc pins by digest. Refuses refs other than `main`/`v*` tags, and tags that disagree with `package.json`. Guarded to `eacg-gmbh/ts-mcp`, so it never runs in the public upstream and never touches Docker Hub
+- `ts-mcp-gha-ecr-mirror` OIDC role (`deploy/cfn-github-oidc.yaml`) is now also trusted from `v*` release tags, not only from `main`
+- `deploy/README.md`: the two routes into ECR (`ecr-publish` from this repository's code vs `mirror-to-ecr` from the public image), required configuration, and the release procedure
+
 ## [0.2.1] - 2026-08-24
 
 ### Changed
