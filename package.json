@@ -1,6 +1,6 @@
 {
   "name": "@trustsource/mcp-server",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "MCP server for the TrustSource REST API",
   "type": "module",
   "main": "dist/index.js",
@@ -44,6 +44,7 @@
     "hono": "^4.13.5",
     "qs": "^6.16.0",
     "@hono/node-server": "^2.1.1",
-    "ip-address": "^10.5.1"
+    "ip-address": "^10.5.1",
+    "proxy-addr": "^2.0.8"
   }
 }

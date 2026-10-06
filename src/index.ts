@@ -297,7 +297,7 @@ function registerTools(
           const errorText =
             typeof response.body === "string"
               ? response.body
-              : JSON.stringify(response.body, null, 2);
+              : JSON.stringify(response.body);
           logger.warn(`API error ${response.status}`, { path: apiPath });
           return {
             content: [
@@ -318,7 +318,7 @@ function registerTools(
         const resultText =
           typeof responseBody === "string"
             ? responseBody
-            : JSON.stringify(responseBody, null, 2);
+            : JSON.stringify(responseBody);
 
         return { content: [{ type: "text", text: resultText }] };
       } catch (err) {
