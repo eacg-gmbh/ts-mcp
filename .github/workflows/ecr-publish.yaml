@@ -1,0 +1,228 @@
+name: ECR Publish
+
+# Builds this fork's own image, gates it with ts-scan, and publishes it to ECR.
+# This is the image ts-agent-svc bundles (`COPY --from=<ecr>/ts-mcp@sha256:...`),
+# so it must carry the fork's internal additions (role packs, TS_ROLE, playbook
+# overrides) — which is why it is built here and not mirrored from Docker Hub
+# (mirror-to-ecr.yaml is for the public upstream image only).
+#
+# Docker Hub publishing stays the PUBLIC repository's job (docker-publish.yaml,
+# guarded to TrustSource/ts-mcp). This workflow is the mirror-image guard: it
+# runs only in the fork, and never touches Docker Hub.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - "ts-api/**"
+      - "domain-mapping.yaml"
+      - "Dockerfile"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - ".github/workflows/ecr-publish.yaml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write # OIDC to AWS
+  contents: write # create/update the GitHub release that records the digest
+
+# A tag build and a main build of the same commit must not race on the same
+# ECR tags; never cancel a publish half way through a push.
+concurrency:
+  group: ecr-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SCAN_TAG: ts-mcp:scan-candidate
+
+jobs:
+  build-scan-publish:
+    name: Build, Scan & Publish to ECR
+    if: github.repository == 'eacg-gmbh/ts-mcp'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Only main (rolling DEV build) and v* tags (releases) may publish. A
+      # manual dispatch from any other branch would otherwise push an
+      # unreviewed build to the registry production pulls from.
+      - name: Refuse refs that may not publish
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF" in
+            refs/heads/main|refs/tags/v*) ;;
+            *) echo "::error::Only main and v* tags may publish to ECR (got $GITHUB_REF)."; exit 1 ;;
+          esac
+
+      # Release tags are the source of truth for the version (E8): the image
+      # tagged 0.3.1 must contain a package.json that says 0.3.1.
+      - name: Tag must match package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${PKG_VERSION}."
+            exit 1
+          fi
+
+      # Fail before building anything if the configuration is missing, with a
+      # message that says what to set — not a cryptic login failure later.
+      - name: Check configuration
+        env:
+          TS_API_KEY: ${{ secrets.TRUSTSOURCE_API_KEY }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          ECR_ROLE: ${{ secrets.AWS_ECR_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "$TS_API_KEY" ]      || missing="$missing secret:TRUSTSOURCE_API_KEY"
+          [ -n "$ECR_REPOSITORY" ]  || missing="$missing variable:ECR_REPOSITORY"
+          [ -n "$ECR_ROLE" ]        || missing="$missing secret:AWS_ECR_ROLE_ARN"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing configuration:$missing (see deploy/README.md)."
+            exit 1
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # --- Scan first, before any credential that can write to ECR is used ---
+
+      # Single platform on purpose: `load: true` cannot load a multi-platform
+      # manifest list into the docker daemon, and ts-scan needs one concrete
+      # image. The npm dependency set is identical across platforms.
+      - name: Build image for scanning (local only, amd64)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.SCAN_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Install ts-scan
+        run: pip install "ts-scan>=1.7.0"
+
+      - name: Scan image
+        run: |
+          ts-scan scan \
+            --use-syft \
+            --tag "${{ github.sha }}" \
+            --branch "${{ github.ref_name }}" \
+            -o scan-results.json \
+            docker:${{ env.SCAN_TAG }}
+
+      # Own project name: the public pipeline uploads "ts-mcp" from the public
+      # repository, and the fork's image (extra role packs, extra dependencies
+      # over time) must not be folded into that history.
+      - name: Upload scan to TrustSource and gate on results
+        env:
+          TS_API_KEY: ${{ secrets.TRUSTSOURCE_API_KEY }}
+        run: |
+          set -euo pipefail
+          ts-scan upload \
+            --api-key "$TS_API_KEY" \
+            --project-name "ts-mcp-eacg-fork" \
+            --wait-for-analysis \
+            --wait-timeout 300 \
+            --exit-on-vulns \
+            --Werror \
+            scan-results.json
+
+      # --- Only now touch AWS ---
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ECR_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
+
+      # The registry host comes from the login, so it is by construction the
+      # registry these credentials are good for (same reasoning as
+      # mirror-to-ecr.yaml).
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}
+          # <semver> on release tags, `main` on the rolling build, <sha> always.
+          tags: |
+            type=semver,pattern={{version}}
+            type=ref,event=branch
+            type=sha,prefix=,format=short
+
+      - name: Push multi-platform image to ECR
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Reuses the amd64 layers built for the scan above, so the published
+          # amd64 image is the one that actually passed the gate.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The digest is what ts-agent-svc pins (`ts-mcp@sha256:...`) — a tag can
+      # move, a digest cannot.
+      - name: Record the image digest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${REPOSITORY}@${DIGEST}"
+          {
+            echo "### Published ts-mcp image"
+            echo
+            echo "Pin this in ts-agent-svc:"
+            echo
+            echo '```'
+            echo "$IMAGE"
+            echo '```'
+            echo
+            echo "Tags: $(echo "$TAGS" | sed "s|${REGISTRY}/${REPOSITORY}:||" | paste -sd ' ' -)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "image=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Add the digest to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          NOTES="**Image (pin by digest):**
+
+          \`${image}\`
+
+          Built from \`${GITHUB_SHA}\` and gated by ts-scan (\`--exit-on-vulns --Werror\`) before publishing."
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --notes "$NOTES"
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "$NOTES"
+          fi

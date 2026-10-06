@@ -218,6 +218,28 @@ The domain-mapping.yaml file controls which API paths are included and how they 
 
 **Consequences:** The publish pipeline only blocks on vulnerability findings. Legal compliance remains visible in TrustSource but does not prevent image publication.
 
+### ADR-014: The ts-agent-svc image is built and published from the fork, not mirrored (2026-10-06)
+
+**Context:** ts-agent-svc bundles ts-mcp into its runtime image and pins it by digest. Its
+role packs, `TS_ROLE` selection and playbook overrides exist only in this fork until they
+are upstreamed, so the public Docker Hub image cannot be what it bundles. The earlier plan
+(PR #1) mirrored the public image into ECR — correct for the fork's own ECS service while
+it runs unmodified upstream code, wrong for anything that needs the fork's additions.
+
+**Decision:** A second pipeline, `ecr-publish.yaml`, builds *this repository's* code, scans
+it with ts-scan **before any AWS credential is used**, and only then pushes to ECR as
+`<semver>` (on `v*` tags), `main` and `<sha>`. The digest is recorded in the run summary
+and the GitHub release notes. `mirror-to-ecr.yaml` stays for the upstream-only case. The
+workflow is guarded to `eacg-gmbh/ts-mcp` (the established convention here: guard rather
+than delete, so syncing workflow files from upstream stays conflict-free) and never
+touches Docker Hub. Scan results go to their own TrustSource project so the fork's image
+history is not folded into the public pipeline's.
+
+**Consequences:** One more workflow to keep green, and a `v*` tag becomes a credential-
+bearing event (the ECR role is trusted from release tags) — hence tag protection is
+documented as a requirement, and the scan gate runs before the credentials do. Releases
+now have exactly one answer to "what is running": a digest in a release note.
+
 ## CI/CD Pipeline
 
 ```
@@ -244,3 +266,5 @@ ts-scan: Upload to TrustSource & wait for analysis
 ```
 
 Weekly: `sync-openapi.yaml` checks for upstream OpenAPI spec changes and creates a PR if the spec has been updated.
+
+**Fork only:** `ecr-publish.yaml` runs the same build → ts-scan gate → push sequence against ECR on `v*` tags and `main` (ADR-014); `docker-publish.yaml` is skipped in the fork.

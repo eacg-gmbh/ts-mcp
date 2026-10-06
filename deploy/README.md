@@ -4,6 +4,19 @@ This directory exists **only in the private repository** (`eacg-gmbh/ts-mcp`). I
 removed from the public one, where it had been carrying real VPC, subnet, cluster,
 security-group and hosted-zone identifiers.
 
+## Two ways an image reaches ECR
+
+| | `ecr-publish` (E8) | `mirror-to-ecr` |
+|---|---|---|
+| Source | **this repository's own code** | the public image on Docker Hub |
+| Contains | the fork's additions (role packs, `TS_ROLE`, playbook overrides) | upstream only |
+| Gate | ts-scan runs **here**, before any AWS credential is used | ts-scan ran in the public repo |
+| Trigger | push of a `v*` tag, push to `main` | manual (`workflow_dispatch`) |
+| Used by | **ts-agent-svc** (pinned by digest), this repo's ECS service | the fork's own ECS service, while it runs unmodified upstream |
+
+ts-agent-svc must use `ecr-publish`: its role packs exist only in this fork, so a
+mirrored public image would silently lack them.
+
 ## How the two repositories relate
 
 ```
@@ -69,7 +82,7 @@ Two roles rather than one, because they are trusted differently:
 
 | Role | Trusted from | May do |
 |---|---|---|
-| `ts-mcp-gha-ecr-mirror` | the `main` branch | push to the one ECR repository |
+| `ts-mcp-gha-ecr-mirror` | the `main` branch and `v*` tags | push to the one ECR repository |
 | `ts-mcp-gha-deploy` | the `dev` / `prd` **environments** | deploy the service stack |
 
 The deploy role is reachable only through a GitHub Environment, so environment
@@ -84,6 +97,18 @@ themselves, not merely the workflow that asks for them.
 | Variable | `AWS_REGION` | `eu-central-1` (used if unset) |
 | Secret | `AWS_ECR_ROLE_ARN` | OIDC role allowed to push to that repository. Falls back to `AWS_DEPLOY_ROLE_ARN` if unset — that role then needs ECR push permission. |
 
+| Secret | `TRUSTSOURCE_API_KEY` | TrustSource API key the ts-scan gate uploads with (`ecr-publish` fails fast, naming what is missing, if it is absent) |
+
+The ECR repository itself must exist, with **mutable tags** (the rolling `main` tag
+moves; semver and `<sha>` tags are written once). Create it once:
+
+```sh
+aws ecr create-repository --repository-name ts-mcp --image-scanning-configuration scanOnPush=true
+```
+
+Protect the `v*` tag pattern (repository settings → tag rules) so that only
+maintainers can create release tags: the ECR role is assumable from them.
+
 The registry host is not configured: it comes from the ECR login step, so it is by
 construction the registry the assumed role is authenticated against.
 
@@ -95,3 +120,15 @@ CloudFormation has no login step to derive it from:
 account the credentials belong to plus `ECR_REPOSITORY`, so it cannot drift away from
 the registry the mirror pushes to. The CloudFormation parameter has no default, so a
 dropped override fails loudly instead of silently deploying from somewhere else.
+
+## Releasing a version (ecr-publish)
+
+1. Bump `package.json` to `X.Y.Z`, update `CHANGELOG.md`, merge to `main`.
+2. Tag `vX.Y.Z` on that commit and push the tag. The workflow refuses to run if the
+   tag and `package.json` disagree.
+3. `ecr-publish` builds, runs ts-scan (`--exit-on-vulns --Werror`) and, only if that
+   passes, pushes `:X.Y.Z` and `:<sha>` (multi-arch: amd64 + arm64) to ECR.
+4. The image **digest** is printed in the run summary and written into the GitHub
+   release notes. ts-agent-svc pins that digest (`ts-mcp@sha256:...`), never a tag.
+
+Pushes to `main` publish the rolling `:main` and `:<sha>` the same way, behind the same gate.
